@@ -75,8 +75,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gateway.api.deps import (
-    AdmittedMemory,
-    MemoryToolAdmission,
     ToolPorts,
     asks_to_keep_trace_content,
     get_automatic_router,
@@ -295,7 +293,7 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.mcp_stateless import failure_class
-from gateway.services.memory import MemoryToolBackend
+from gateway.services.memory import AdmittedMemory, MemoryToolAdmission, MemoryToolBackend
 from gateway.services.model_access import (
     McpAccess,
     key_model_refusal,
@@ -4156,7 +4154,6 @@ async def _admit_memory(
     model = ctx.resolved_provider.model if ctx.resolved_provider is not None else None
     try:
         return await admission.admit(
-            ctx.db,
             ctx.api_key,
             asked=asked,
             declined=header == "off",

@@ -50,8 +50,8 @@ from gateway.services.tenancy import (
     InvitationClaimSettings,
     OrganizationDomainService,
     OrganizationService,
+    WorkspaceAccess,
 )
-from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.workspace_activation_service import WorkspaceActivationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
 from gateway.services.tools import McpGrantMembershipListener

@@ -1,3 +1,4 @@
+from gateway.services.memory._admission import AdmittedMemory, CallerLookup, MemoryToolAdmission
 from gateway.services.memory._experiment import ArmSummary, Difference, ExperimentArm, SessionUsage
 from gateway.services.memory._guardrails import (
     GuardrailOutcome,
@@ -33,6 +34,9 @@ from gateway.services.memory._tools import MemoryTools, ToolOutcome
 from gateway.services.memory._worker import MemoryConsolidator
 
 __all__ = [
+    "AdmittedMemory",
+    "CallerLookup",
+    "MemoryToolAdmission",
     "MemoryToolBackend",
     "RunMemoryTool",
     "ToolOutcome",

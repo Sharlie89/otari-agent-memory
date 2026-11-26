@@ -61,6 +61,8 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.core.config import GatewayConfig
+from gateway.core.database import create_session
 from gateway.exceptions.guardrails_exceptions import (
     OrganizationGuardrailAlreadyExistsError,
     OrganizationGuardrailCheckFailedError,
@@ -100,17 +102,21 @@ from gateway.services.guardrails import (
     GuardrailsNotReachableError,
     GuardrailVerdict,
     InProcessGuardrail,
+    deployment_guardrails_url,
     require_base_url,
     run_input_guardrails,
 )
+from gateway.services.memory import GuardrailOutcome, GuardrailsUnavailableError
 from gateway.services.secret_box import (
     SecretBoxUnavailableError,
+    SecretDecryptionError,
     decrypt_mapping,
     decrypt_secret,
     encrypt_mapping,
     encrypt_secret,
     readable_mapping,
 )
+from gateway.services.tenancy.organization_guardrail_runner import handle as held_guardrail
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 
@@ -607,6 +613,60 @@ async def run_organization_guardrails(
             if mandate.definition_id is not None
         },
     )
+
+
+class _MemoryMandate:
+    """The guardrails an organization mandates for one workspace, run over a memory proposal."""
+
+    def __init__(
+        self, config: GatewayConfig, organization_id: uuid.UUID, mandates: list[ResolvedOrganizationGuardrail]
+    ) -> None:
+        self._config = config
+        self._organization_id = organization_id
+        self._mandates = mandates
+
+    async def check(self, text: str) -> GuardrailOutcome:
+        try:
+            verdict = await run_organization_guardrails(
+                self._mandates,
+                text,
+                organization_id=self._organization_id,
+                default_url=deployment_guardrails_url(self._config),
+                held=held_guardrail,
+            )
+        except GuardrailsNotReachableError as exc:
+            # The reason names the profile and the endpoint, for the operator, and never what was checked.
+            logger.warning("A mandated guardrail could not check a memory proposal: %s", exc)
+            raise GuardrailsUnavailableError from None
+        return GuardrailOutcome(
+            blocked=tuple(result.profile for result in verdict.flagged if result.mode == "block"),
+            monitored=tuple(result.profile for result in verdict.flagged if result.mode != "block"),
+            unchecked=tuple(result.profile for result in verdict.results if result.status != "evaluated"),
+        )
+
+
+class MemoryMandates:
+    """The guardrails an organization mandates for a workspace's agent memory, read as the request path reads them."""
+
+    def __init__(self, config: GatewayConfig) -> None:
+        self._config = config
+
+    async def mandated(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> _MemoryMandate | None:
+        try:
+            # On a session of its own, closed before any check runs, so no transaction idles over one.
+            async with create_session() as session:
+                mandates = await resolve_organization_guardrails(
+                    session, organization_id=organization_id, workspace_id=workspace_id, for_memory=True
+                )
+        except (SecretBoxUnavailableError, SecretDecryptionError) as exc:
+            # As on a request, a mandate whose credential will not open is not run unauthenticated.
+            logger.error(
+                "Organization guardrail credential could not be decrypted for organization %s: %s",
+                organization_id,
+                exc,
+            )
+            raise GuardrailsUnavailableError from None
+        return _MemoryMandate(self._config, organization_id, mandates) if mandates else None
 
 
 def _stored_mode(value: str) -> Literal["block", "monitor"]:

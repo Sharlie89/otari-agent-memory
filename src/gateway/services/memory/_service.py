@@ -117,7 +117,7 @@ FlagReason = Literal["wrong", "stale", "duplicate", "unsafe"]
 class WorkspaceManagers(Protocol):
     """Who may change memory's switches: an organization's owners and admins, and a workspace's own.
 
-    The builder in ``api/deps`` implements it with the tenancy checks every workspace policy uses.
+    Tenancy implements it with the checks every workspace policy uses.
     """
 
     async def require_manager(self, user: User, workspace_id: uuid.UUID) -> uuid.UUID:
@@ -130,7 +130,7 @@ class WorkspaceManagers(Protocol):
 
 
 class MemoryMeter(Protocol):
-    """Where memory's model calls are recorded as its workspace's usage. The builder in ``api/deps`` implements it."""
+    """Where memory's model calls are recorded as its workspace's usage. The usage domain implements it."""
 
     async def record(self, workspace_id: uuid.UUID, api_key_id: str | None, use: ModelUse) -> None:
         """Stage one call in the open block."""
@@ -147,7 +147,7 @@ class MemoryCallUsage:
 
 
 class UsageLedger(Protocol):
-    """What a workspace's requests used, read for the savings experiment. The builder in ``api/deps`` implements it."""
+    """What a workspace's requests used, read for the savings experiment. The usage domain implements it."""
 
     async def sessions(self, workspace_id: uuid.UUID, since: datetime, until: datetime) -> dict[str, SessionUsage]:
         """Each session's usage of the workspace's requests in the window, by its trace id; side calls left out."""

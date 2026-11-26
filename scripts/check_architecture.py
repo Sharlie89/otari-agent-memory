@@ -963,14 +963,6 @@ COMPOSITION_ROOT_SCOPE = "gateway/api/deps"
 # session-taking service functions take a Unit of Work instead.
 COMPOSITION_ROOT_BEHAVIOR_BASELINE: tuple[tuple[str, str], ...] = (
     ("gateway/api/deps/__init__.py", "_BatchAccountingClaim"),
-    # Agent memory's adapters, carried over from the single deps module when the branch took main's split.
-    # They belong in the memory domain; moving them there is follow-up work, and removes these entries.
-    ("gateway/api/deps/memory.py", "MemoryToolAdmission"),
-    ("gateway/api/deps/memory.py", "_MemoryGuardrails"),
-    ("gateway/api/deps/memory.py", "_MemoryLedger"),
-    ("gateway/api/deps/memory.py", "_MemoryManagers"),
-    ("gateway/api/deps/memory.py", "_MemoryMandate"),
-    ("gateway/api/deps/memory.py", "_MemoryUsage"),
     ("gateway/api/deps/tools.py", "_CodeExecutionEnvironmentPrices"),
     ("gateway/api/deps/tools.py", "_DirectToolAccounts"),
     ("gateway/api/deps/tools.py", "_DirectToolGates"),
@@ -1353,9 +1345,7 @@ def check_domain_names(src_root: Path, domains: set[str]) -> list[str]:
 # the number is what has to come down.
 NON_DOMAIN_SERVICE_IMPORT_BASELINE: dict[str, int] = {
     "code_execution": 1,
-    # Two of these are api/deps/memory.py reaching tenancy's authorization and organization guardrails, which
-    # the single deps module already imported before main split it; they go when memory's adapters move out.
-    "tenancy": 68,
+    "tenancy": 63,
 }
 
 

@@ -3,7 +3,7 @@
 An organization's mandated guardrails check what a member sends on a completion request. What an agent proposes
 reaches no completion endpoint, yet once kept it reaches other members' prompts through recall, so the
 consolidator runs the same mandates over a proposal's text. Memory names only what it needs of them here; the
-builder in ``api/deps`` implements both protocols with the guardrails a request runs.
+organization guardrail service implements both protocols with the guardrails a request runs.
 """
 
 import uuid

@@ -26,7 +26,7 @@ from gateway.api.deps.auth import (
 from gateway.api.deps.budgets import (
     get_budget_service,
 )
-from gateway.api.deps.memory import MemoryToolAdmission, get_memory_tool_admission
+from gateway.api.deps.memory import get_memory_tool_admission
 from gateway.api.deps.ports import (
     BillingPortDep,
     CodeExecutionPortDep,
@@ -84,14 +84,15 @@ from gateway.services.inference import (
     describe_port_error,
 )
 from gateway.services.log_writer import LogWriter
+from gateway.services.memory import MemoryToolAdmission
 from gateway.services.playground_service import LocalToolOffer, PlaygroundToolOffer
 from gateway.services.pricing_service import (
     resolve_tool_rate,
 )
 from gateway.services.tenancy import (
     OrganizationService,
+    WorkspaceAccess,
 )
-from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.workspace_mcp_server_service import WorkspaceMcpServers
 from gateway.services.tenancy.workspace_web_search_service import WorkspaceWebSearchPolicies, WorkspaceWebSearchService
 from gateway.services.tool_settings_service import load_overrides, stage_override

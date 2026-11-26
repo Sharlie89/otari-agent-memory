@@ -86,12 +86,8 @@ from gateway.api.deps.invitations import (
     get_invitations,
 )
 from gateway.api.deps.memory import (
-    MEMORY_RECALL_BUDGET_S,
-    NOT_A_MEMBER,
-    AdmittedMemory,
     MemoryCallerDep,
     MemoryServiceDep,
-    MemoryToolAdmission,
     build_memory_service,
     get_memory_caller,
     get_memory_keys,
@@ -327,8 +323,7 @@ from gateway.services.routing import (
     AutomaticRouter,
     RoutingService,
 )
-from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
-from gateway.services.tenancy.authorization import WorkspaceAccess
+from gateway.services.tenancy import OrganizationService, WorkspaceAccess, organization_guardrail_runner
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService, refresh_org_provider_cache
 from gateway.services.tenancy.organization_guardrail_definition_service import (
     OrganizationGuardrailDefinitionService,
@@ -1410,11 +1405,7 @@ __all__ = [
     "memory_keys_for",
     "build_memory_service",
     "MemoryServiceDep",
-    "AdmittedMemory",
-    "MemoryToolAdmission",
     "MemoryCallerDep",
-    "MEMORY_RECALL_BUDGET_S",
-    "NOT_A_MEMBER",
     "get_memory_caller",
     "get_memory_keys",
     "get_memory_ranking",

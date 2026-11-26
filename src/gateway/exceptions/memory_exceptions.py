@@ -14,6 +14,7 @@ WORKSPACE_SCOPE_OFF = "Shared workspace memory is off for this workspace. Use th
 ENTRY_NOT_FOUND = "No memory entry with that id."
 PROPOSAL_NOT_FOUND = "No proposal waiting for review with that id."
 READ_ONLY = "Workspace viewers can search memory but not change it."
+NOT_A_MEMBER = "Memory is for workspace members, and this key names none of its workspace."
 NO_READ_SCOPE = "This API key lacks the 'memory:read' scope, which memory's tools and automatic recall require."
 NO_WRITE_SCOPE = "This API key lacks the 'memory:write' scope, which changing memory requires."
 NOT_YOURS = "Only the entry's author, its owner or a workspace admin can forget it."
