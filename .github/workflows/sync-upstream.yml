@@ -1,0 +1,52 @@
+name: Sync upstream
+
+# Keeps this fork's main level with mozilla-ai/otari's main, and nothing else: no
+# other branch is touched, so feature branches are brought up to date by hand
+# (git merge origin/main), where a conflict can be resolved.
+#
+# Needs a SYNC_TOKEN secret: a fine-grained token for this repository with
+# Contents, Workflows and Actions set to read and write. The default
+# GITHUB_TOKEN may not push commits that change .github/workflows, and
+# upstream changes them often.
+
+on:
+  schedule:
+    - cron: "23 */6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Merge upstream main into this fork's main
+        run: |
+          gh api -X POST "repos/$REPO/merge-upstream" -f branch=main \
+            --jq '"\(.merge_type): \(.message)"'
+
+      # Upstream's own workflows (releases, publishing, bot reviews) arrive with
+      # each sync and are meant for mozilla-ai/otari, so they are kept disabled,
+      # new ones included. The CI a pull request here needs is left running.
+      - name: Keep upstream's workflows disabled
+        run: |
+          gh api "repos/$REPO/actions/workflows" --paginate \
+            --jq '.workflows[] | select(.state == "active") | select(.path | IN(
+                ".github/workflows/sync-upstream.yml",
+                ".github/workflows/otari-tests.yml",
+                ".github/workflows/otari-lint.yml",
+                ".github/workflows/otari-typecheck.yml",
+                ".github/workflows/otari-pr-title.yml",
+                ".github/workflows/otari-dashboard.yml"
+              ) | not) | .id' |
+          while read -r id; do
+            gh api -X PUT "repos/$REPO/actions/workflows/$id/disable" && echo "disabled workflow $id"
+          done
