@@ -41,6 +41,10 @@ from gateway.types.endpoint_auth import (
 from gateway.types.model_type import ModelType, OfferedModelType
 from gateway.types.price_unit import AcceptedPriceUnit, PriceUnit
 
+# Where an operator declares a hosted provider's inference runs, as a routing
+# policy's ``eligibility`` reads it (``gateway.models.routing.DeploymentLocality``).
+RoutingLocality = Literal["local", "private", "cloud"]
+
 
 class EndpointAuthRequest(SQLModel):
     """The credential an edge proxy in front of a key's base URL requires.
@@ -567,6 +571,10 @@ class HostedProviderCreateRequest(SQLModel):
     A workspace that lists the locations it accepts is served only from one of them.
     ``zero_data_retention`` declares that the upstream keeps no prompt or
     completion data; the catalog shows it and nothing enforces it.
+    ``routing_locality`` declares where the upstream's inference runs (``local``,
+    ``private`` or ``cloud``) for routing policies with ``eligibility``, and
+    every region inherits it; null leaves it undeclared, and such a provider
+    serves no such policy.
     ``terms_url`` and ``privacy_url`` link the upstream's own terms of service
     and privacy policy from the public Providers pages: absolute http(s)
     addresses with no username or password.
@@ -585,6 +593,7 @@ class HostedProviderCreateRequest(SQLModel):
     supported_countries: list[str] | None = Field(default=None, max_length=300)
     data_location: str | None = Field(default=None, max_length=16)
     zero_data_retention: bool = False
+    routing_locality: RoutingLocality | None = None
     terms_url: str | None = Field(default=None, max_length=1024)
     privacy_url: str | None = Field(default=None, max_length=1024)
 
@@ -616,8 +625,9 @@ class HostedProviderUpdateRequest(SQLModel):
     null clears it, and an entry echoed back as the mask keeps the stored value.
     ``restricted_to_organization_id`` reads the same way: omitted keeps the
     restriction, null lifts it, and so does ``supported_countries``, where an
-    empty list closes the provider to every country, and ``data_location``. ``terms_url`` and
-    ``privacy_url`` omitted are left alone; null or an empty string removes the link.
+    empty list closes the provider to every country, and ``data_location`` and
+    ``routing_locality``. ``terms_url`` and ``privacy_url`` omitted are left
+    alone; null or an empty string removes the link.
     """
 
     # A toggle alone, so a reader who edits the example never re-sends a key.
@@ -632,6 +642,7 @@ class HostedProviderUpdateRequest(SQLModel):
     supported_countries: list[str] | None = Field(default=None, max_length=300)
     data_location: str | None = Field(default=None, max_length=16)
     zero_data_retention: bool | None = None
+    routing_locality: RoutingLocality | None = None
     terms_url: str | None = Field(default=None, max_length=1024)
     privacy_url: str | None = Field(default=None, max_length=1024)
 
@@ -812,7 +823,9 @@ class HostedProviderPublic(SQLModel):
     upstream keeps no prompt or completion data. ``terms_url`` and
     ``privacy_url`` are the upstream's policies, null where none is linked.
     ``data_location`` is where the upstream keeps request data, null where
-    nobody declared it. ``regions`` lists the regions it serves from, in the
+    nobody declared it. ``routing_locality`` is where the operator declares the
+    upstream's inference runs, for routing policies with ``eligibility``, null
+    where nobody declared it. ``regions`` lists the regions it serves from, in the
     order they are tried, and is empty for a provider that serves from its own
     connection alone. ``models`` counts its offered models, on the list only.
     """
@@ -832,6 +845,7 @@ class HostedProviderPublic(SQLModel):
     supported_countries: list[str] | None = None
     data_location: str | None = None
     zero_data_retention: bool = False
+    routing_locality: RoutingLocality | None = None
     terms_url: str | None = None
     privacy_url: str | None = None
     shadows_config: bool = False
@@ -873,6 +887,7 @@ class HostedProviderPublic(SQLModel):
             supported_countries=row.supported_countries,
             data_location=row.data_location,
             zero_data_retention=row.zero_data_retention,
+            routing_locality=_routing_locality(row.routing_locality),
             terms_url=row.terms_url,
             privacy_url=row.privacy_url,
             shadows_config=shadows_config,
@@ -895,6 +910,7 @@ class HostedProviderPublic(SQLModel):
         supported_countries: list[str] | None = None,
         data_location: str | None = None,
         zero_data_retention: bool = False,
+        routing_locality: str | None = None,
         terms_url: str | None = None,
         privacy_url: str | None = None,
     ) -> HostedProviderPublic:
@@ -915,9 +931,21 @@ class HostedProviderPublic(SQLModel):
             supported_countries=supported_countries,
             data_location=data_location,
             zero_data_retention=zero_data_retention,
+            routing_locality=_routing_locality(routing_locality),
             terms_url=terms_url,
             privacy_url=privacy_url,
         )
+
+
+def _routing_locality(value: str | None) -> RoutingLocality | None:
+    """A stored routing locality as the API states it; a value this build does not know reads as undeclared."""
+    if value == "local":
+        return "local"
+    if value == "private":
+        return "private"
+    if value == "cloud":
+        return "cloud"
+    return None
 
 
 class HostedProvidersPublic(SQLModel):

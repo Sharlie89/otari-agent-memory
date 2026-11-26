@@ -39,7 +39,7 @@ from gateway.core.settings.traces import TraceSettings
 from gateway.core.settings.update_check import UpdateCheckSettings
 from gateway.core.settings_view import OMITTED, SECRET, SettingsGroup, Shown
 from gateway.log_config import logger
-from gateway.models.routing import RoutingConfig
+from gateway.models.routing import DeploymentLocality, InferenceOperation, RoutingConfig
 from gateway.models.tools import CodeExecutor, SandboxProvider
 from gateway.types.models_dev import MODELS_DEV_BASE_URL, normalize_models_dev_base_url
 
@@ -514,8 +514,22 @@ class SandboxEnvironmentConfig(BaseModel):
     )
 
 
+class OperationCapabilities(BaseModel):
+    """What a routing policy with ``eligibility`` may send a model for one operation.
+
+    Only a narrowing: an operation with no declaration is served, streaming
+    included, so a declaration is needed only to take one out (``enabled:
+    false``) or to keep streamed requests away (``streaming: false``).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    streaming: bool = True
+
+
 class ModelCapabilityConfig(BaseModel):
-    """Per-model multimodal capability override.
+    """Per-model capability declaration.
 
     any-llm exposes provider-class-level ``SUPPORTS_COMPLETION_IMAGE`` /
     ``SUPPORTS_COMPLETION_PDF`` flags, but those are set on the OpenAI-compatible
@@ -533,6 +547,14 @@ class ModelCapabilityConfig(BaseModel):
     supports_pdf: bool = Field(
         default=False,
         description="Model can natively understand PDF/document content blocks.",
+    )
+    operations: dict[InferenceOperation, OperationCapabilities] = Field(
+        default_factory=dict,
+        description=(
+            "Per-operation narrowing for routing policies with eligibility, keyed by operation name. "
+            "An undeclared operation is served. Under an '<instance>:*' key it is the default for "
+            "every model of that instance."
+        ),
     )
 
 
@@ -2004,7 +2026,7 @@ class GatewayConfig(
                 return
 
     def validate_provider_instances(self) -> None:
-        """Validate per-instance ``provider_type`` / ``models`` / ``max_retries`` / ``messages_api`` declarations.
+        """Validate per-instance gateway metadata.
 
         Fails fast at startup so a typo in ``provider_type`` (or a non-list
         ``models``) surfaces immediately rather than as a per-request error.
@@ -2054,6 +2076,22 @@ class GatewayConfig(
             if messages_api is not None and messages_api not in MESSAGES_API_VALUES:
                 msg = f"providers.{instance}.messages_api must be one of: {', '.join(MESSAGES_API_VALUES)}."
                 raise ValueError(msg)
+            if "routing_locality" in entry:
+                try:
+                    locality = DeploymentLocality(entry["routing_locality"])
+                except ValueError:
+                    msg = f"providers.{instance}.routing_locality must be one of: {', '.join(DeploymentLocality)}."
+                    raise ValueError(msg) from None
+                if locality != DeploymentLocality.CLOUD:
+                    base = entry.get("api_base")
+                    try:
+                        url = urlsplit(base) if isinstance(base, str) else None
+                        valid_base = url is not None and url.scheme in ("http", "https") and bool(url.hostname)
+                    except ValueError:
+                        valid_base = False
+                    if not valid_base:
+                        msg = f"providers.{instance}.api_base must be an explicit HTTP(S) URL for {locality} routing."
+                        raise ValueError(msg)
             if not entry:
                 self._warn_on_uncredentialed_bare_entry(instance)
 

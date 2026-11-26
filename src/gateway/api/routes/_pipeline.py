@@ -206,6 +206,7 @@ from gateway.models.guardrails import GuardrailConfig
 from gateway.models.mcp import McpServerConfig
 from gateway.models.money import to_usd
 from gateway.models.pricing import REPORTED_SOURCE, ModelPricing, SettledSource
+from gateway.models.routing import InferenceOperation
 from gateway.models.tools import (
     ResolvedCodeExecutionPolicy,
     ResolvedWebSearchConfig,
@@ -346,6 +347,7 @@ from gateway.services.provider_kwargs import (
 from gateway.services.providers import (
     CountryGate,
     CountryNotServedError,
+    HostedLocalityRefusedError,
     HostedRegionIndex,
     UnknownHostedUpstreamError,
     dispatch_on_hosted_credential,
@@ -363,6 +365,7 @@ from gateway.services.routing import (
     BudgetState,
     CompiledPlan,
     NoEligibleCandidatesError,
+    RoutingRequirements,
     RoutingSignal,
     compile_catalog_plan,
     compile_policy,
@@ -1554,6 +1557,7 @@ def _hosted_candidate(
                 organization_id=ctx.organization_id,
                 workspace_id=ctx.workspace_id,
                 country_gate=ctx.country_gate,
+                allowed_localities=attempt.allowed_localities,
             )
         except HostedAccessDeniedError as exc:
             if ctx.plan is not None and ctx.plan.automatic is not None:
@@ -1689,6 +1693,9 @@ async def _serve_from_hosted_credential(
             # actually serves it.
             provider=resolved.instance,
             model=resolved.model,
+            # A one-attempt plan never reaches the walk, so its policy's
+            # eligibility is held to here, against the region the port picks.
+            allowed_localities=ctx.plan.attempts[0].allowed_localities if ctx.plan is not None else None,
         )
         country_gate = ctx.country_gate
         if country_gate is not None and credential is not None:
@@ -2267,6 +2274,7 @@ async def _compile_request_plan(
     allowlist: list[str] | None,
     endpoint: str,
     started_at: float,
+    streaming: bool = False,
     routing_signal: Callable[[], RoutingSignal] | None = None,
     workspace_id: uuid.UUID,
     request_id: str | None = None,
@@ -2308,6 +2316,11 @@ async def _compile_request_plan(
             strategy=config.budget_strategy,
         )
 
+    requirements = (
+        RoutingRequirements(operation=InferenceOperation(adapter.name), streaming=streaming)
+        if spec.eligibility is not None
+        else RoutingRequirements()
+    )
     # Only asked when the router entry is the one this request would reach: a `when`
     # entry ahead of it wins outright, and ranking for a plan that discards the
     # ranking is followed by a log line claiming a decision the request did not use.
@@ -2323,6 +2336,8 @@ async def _compile_request_plan(
             allowlist=allowlist,
             signal=routing_signal() if routing_signal is not None else None,
             workspace_id=workspace_id,
+            country_gate=country_gate,
+            requirements=requirements,
         )
 
     try:
@@ -2337,6 +2352,7 @@ async def _compile_request_plan(
             router_ordering=router_ordering,
             workspace_id=workspace_id,
             country_gate=country_gate,
+            requirements=requirements,
         )
     except NoEligibleCandidatesError as exc:
         logger.warning("%s", exc.operator_detail)
@@ -2709,6 +2725,7 @@ async def resolve_request_context(
         allowlist=key_allowlist,
         endpoint=adapter.endpoint,
         started_at=started_at,
+        streaming=streaming,
         routing_signal=routing_signal,
         workspace_id=workspace_id,
         request_id=request_id,
@@ -3155,13 +3172,18 @@ async def resolve_request_context(
             # The rung ``_serve_from_hosted_credential`` adds at dispatch, which a routed chain does not take.
             if gate_instance is None or (plan is not None and len(plan.attempts) > 1):
                 return None
-            hosted = await hosted_credential_for(
-                model_provider,
-                organization_id=organization_id,
-                workspace_id=workspace_id,
-                provider=gate_instance,
-                model=gate_model,
-            )
+            try:
+                hosted = await hosted_credential_for(
+                    model_provider,
+                    organization_id=organization_id,
+                    workspace_id=workspace_id,
+                    provider=gate_instance,
+                    model=gate_model,
+                    allowed_localities=plan.attempts[0].allowed_localities if plan is not None else None,
+                )
+            except HostedLocalityRefusedError:
+                # No upload on a credential the policy's eligibility excludes; dispatch refuses the request.
+                return None
             if hosted is None:
                 return None
             # Before an attachment is uploaded on it, as dispatch would refuse it after.

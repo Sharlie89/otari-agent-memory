@@ -205,6 +205,113 @@ Send `Otari-Router: off` to skip weighted or priority selection for one request
 and use the policy default. There is no header that forces a router on: the
 policy decides that.
 
+## Route by deployment locality and capability
+
+Add `eligibility` to a policy to restrict every candidate, including backups, to
+deployments whose locality it allows. Declare each deployment's locality where
+the deployment is defined:
+
+- a `providers:` instance takes `routing_locality: local | private | cloud`;
+- a hosted provider takes **Routing locality** on the Hosted providers page (or
+  `routing_locality` through the API), and every region of it shares it.
+
+```yaml
+providers:
+  edge:
+    provider_type: openai-compatible
+    api_base: http://inference.internal:8000/v1
+    routing_locality: local
+  managed:
+    provider_type: openai
+    api_key: ${MANAGED_API_KEY}
+    routing_locality: cloud
+
+routing:
+  policies:
+    local-first:
+      select:
+        - default: edge:chat-model
+      on_failure:
+        - managed:gpt-5-mini
+      eligibility:
+        allowed_localities: [local, cloud]
+```
+
+Send `model: local-first` to Chat Completions, Messages or Responses. The local
+target leads, and the managed target can serve if the local target fails before
+committing a response. Set `allowed_localities: [local]` to exclude the managed
+target even when the local target fails, `[private]` for private infrastructure
+only, or `[cloud]` for cloud targets only. Declare the order you prefer in
+`select` and `on_failure`, or in a `priority` router's candidate list. A
+weighted router recalculates shares over its eligible candidates.
+
+| Setting | Meaning |
+| --- | --- |
+| `routing_locality` | `local`, `private` or `cloud`, declared by the operator on a `providers:` instance or a hosted provider. A `local` or `private` `providers:` instance needs an explicit HTTP(S) `api_base`. |
+| `eligibility.allowed_localities` | Non-empty allow-list of localities. |
+| `eligibility.required_capabilities` | Optional `image` and `pdf`: each target must take that input natively. |
+| `model_capabilities."<instance>:<model>".operations` | Optional narrowing per operation (`chat`, `messages`, `responses`): `enabled: false` takes the operation out of these policies, `streaming: false` keeps streamed requests away. |
+| `model_capabilities."<instance>:*".operations` | The same narrowing for every model of an instance, until a model declares its own. |
+
+### What makes a target eligible
+
+**Locality is never assumed.** A target with no declared locality is excluded,
+and so is one served on a credential the operator did not declare: an
+organization's provider key or a tenant's own endpoint. The walker checks a
+hosted provider's locality again against the region it picks for the request.
+
+**Operations are assumed.** A model serves every operation, streamed or not,
+unless `operations` says otherwise. Most setups need no `model_capabilities`
+entry at all:
+
+```yaml
+model_capabilities:
+  "edge:*":                 # every model on edge: no streamed Messages
+    operations:
+      messages: {streaming: false}
+  "edge:embedder":          # one model that does no chat at all
+    operations:
+      chat: {enabled: false}
+```
+
+**Native input is checked when a policy asks for it.** `required_capabilities`
+takes the same verdict the gateway uses to decide whether to forward an image
+or a PDF unchanged: a `supports_image` or `supports_pdf` declaration in
+`model_capabilities`, then the provider's own metadata. Provider metadata counts
+only on the provider's own endpoint, so a target behind an `api_base` of its own
+(an OpenAI-compatible server, a proxy) needs the declaration.
+
+The compiler checks the caller's model access before ranking and applies the
+same checks to fallbacks. `Otari-Router: off` skips ranking and still applies
+eligibility to the default and its backups. If every target is excluded, the
+request returns `403` before dispatch, and the gateway logs each excluded target
+with its reason once per process.
+
+A `providers:` instance declaring `routing_locality` keeps serving from
+config.yml: automatic provider import never copies it to a hosted provider,
+even one copied by an earlier start. At startup the gateway warns about a
+`local` or `private` instance whose endpoint resolves to a public address. It
+still trusts the declaration, because only the operator knows where a proxy
+forwards a request.
+
+This is a policy-level permission for model attempts. Existing workspace and
+user scoping determines which policy applies, and a workspace's allowed data
+locations still apply to hosted providers. Direct model selectors use the
+caller's existing model permissions. Configure guardrails, gateway-run tools,
+file processing and vision description separately if they handle sensitive data.
+
+The explain API and CLI evaluate a non-streaming Chat Completions request and
+list excluded targets and reasons.
+
+A policy with `eligibility` is only served by the completion endpoints. On other
+endpoints (embeddings, images, audio) its name is refused rather than resolved,
+even where a stored alias of the same name exists in another scope.
+
+Add the policy field to opt in. Existing policies require no migration. Before
+downgrading Otari, export and remove eligibility policies from both config and
+stored policy management, then remove the `routing_locality` declarations.
+Older builds cannot read the new policy field.
+
 ## Mandatory guardrails
 
 A policy can run guardrails even when the caller did not request them:
@@ -360,6 +467,8 @@ the deployment-wide routes.
 The authenticating API key determines which workspace resolves a policy.
 User-scoped entries take precedence over wider entries. A config-file policy
 cannot be changed through the API.
+
+Stored eligibility policies use the same API and are read-only in the dashboard.
 
 Changes apply immediately on the worker that accepts the write. Other workers
 refresh stored routing configuration within 30 seconds.

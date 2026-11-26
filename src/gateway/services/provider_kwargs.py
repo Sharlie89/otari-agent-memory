@@ -79,6 +79,7 @@ _INSTANCE_META_KEYS = (
     "max_retries",
     "messages_api",
     "request_fields",
+    "routing_locality",
     ENDPOINT_AUTH_HEADERS_KEY,
 )
 
@@ -892,31 +893,42 @@ def resolve_catalog_fallback(
 ) -> tuple[str, ...]:
     """Every offering a catalog ID stands for, best first, or an empty tuple.
 
-    Empty when an alias or a static policy claims the name, because both come before a catalog spelling.
+    Empty when an alias, a static policy or an eligibility policy claims the name.
     """
-    if _claimed_target(config, model_selector, user_id, workspace_id) is not None:
+    try:
+        target = _claimed_target(config, model_selector, user_id, workspace_id)
+    except _ConstrainedPolicyNeedsPlan:
+        return ()
+    if target is not None:
         return ()
     return resolve_catalog_offerings(model_selector, workspace_id=workspace_id)
+
+
+class _ConstrainedPolicyNeedsPlan(ValueError):
+    """The selector can be served only through a request-aware policy plan."""
 
 
 def _claimed_target(
     config: GatewayConfig, model_selector: str, user_id: str | None, workspace_id: uuid.UUID | None
 ) -> str | None:
-    """The target an alias or a static routing policy gives a name, or ``None``."""
+    """The target an alias or a static routing policy gives a name, or ``None``.
+
+    A policy with ``eligibility`` is looked up first, ahead of an alias, and
+    refuses: configuration cannot give an alias and a policy one name, but a
+    stored alias and a stored policy in different scopes can, and the
+    completion routes serve the policy. Resolving the alias here would serve its
+    target on every other surface with none of the policy's constraints. An
+    alias still wins over a policy without ``eligibility``, as it always has.
+    """
+    spec = resolve_effective_policy(config, model_selector, user_id, workspace_id=workspace_id)
+    if spec is not None and spec.eligibility is not None:
+        raise _ConstrainedPolicyNeedsPlan("Routing policy requires an operation-aware request plan")
     alias = resolve_effective_alias(config, model_selector, user_id, workspace_id=workspace_id)
     if alias is not None:
         return alias
-    # A *static* routing policy is an alias in everything but spelling: one
-    # name, one target. Resolving it here is what makes "an alias is a
-    # one-target policy" true on every model-taking surface (pricing, the
-    # catalog, embeddings, batches) and not only on the completion routes.
-    #
-    # A dynamic policy is deliberately left unresolved. Its candidate depends
-    # on request state that this synchronous path cannot see, so there is no
-    # honest answer to give; picking its default anyway would silently serve a
-    # different model than the policy describes. The completion routes compile
-    # it properly; everywhere else it surfaces as an unknown model.
-    return resolve_static_policy_target(config, model_selector, user_id, workspace_id=workspace_id)
+    if spec is None or spec.is_dynamic:
+        return None
+    return resolve_catalog_selector(spec.default_target, workspace_id=workspace_id) or spec.default_target
 
 
 def resolve_provider_selector(
@@ -1045,27 +1057,6 @@ def resolve_provider_selector(
         kwargs=get_provider_kwargs(config, provider, instance=provider.value, workspace_id=workspace_id),
         alias=model_selector if alias is not None else None,
     )
-
-
-def resolve_static_policy_target(
-    config: GatewayConfig,
-    model_selector: str,
-    user_id: str | None = None,
-    *,
-    workspace_id: uuid.UUID | None = None,
-) -> str | None:
-    """The single target of a static routing policy, or ``None``.
-
-    ``None`` for a name that is not a policy, for a dynamic policy (whose target
-    depends on the request), and when routing is disabled. Scoped like an alias, so
-    a user-scoped policy in this workspace resolves to that user's target. A
-    target written as a catalog spelling is the offering it resolves to, as it
-    is where the completion routes compile the policy.
-    """
-    spec = resolve_effective_policy(config, model_selector, user_id, workspace_id=workspace_id)
-    if spec is None or spec.is_dynamic:
-        return None
-    return resolve_catalog_selector(spec.default_target, workspace_id=workspace_id) or spec.default_target
 
 
 def normalize_pricing_key(config: GatewayConfig, raw_key: str) -> str:

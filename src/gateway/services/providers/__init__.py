@@ -34,6 +34,7 @@ from gateway.services.providers._hosted_provider_service import (
     ResolvedHostedProvider,
 )
 from gateway.services.providers._hosted_runtime import (
+    HostedLocalityRefusedError,
     HostedServing,
     HostedServingBuilder,
     UnknownHostedUpstreamError,
@@ -99,6 +100,7 @@ __all__ = [
     "CountryNotServedError",
     "HostedCatalogUpdate",
     "HostedDataLocations",
+    "HostedLocalityRefusedError",
     "HostedProviderService",
     "HostedRegionIndex",
     "HostedServing",
