@@ -33,13 +33,20 @@ jobs:
           gh api -X POST "repos/$REPO/merge-upstream" -f branch=main \
             --jq '"\(.merge_type): \(.message)"'
 
-      # Upstream's own workflows (CI, releases, publishing) arrive with each sync.
-      # They are meant for mozilla-ai/otari, not for this fork, so every one but
-      # this is kept disabled, new ones included.
+      # Upstream's own workflows (releases, publishing, bot reviews) arrive with
+      # each sync and are meant for mozilla-ai/otari, so they are kept disabled,
+      # new ones included. The CI a pull request here needs is left running.
       - name: Keep upstream's workflows disabled
         run: |
           gh api "repos/$REPO/actions/workflows" --paginate \
-            --jq '.workflows[] | select(.state == "active" and .path != ".github/workflows/sync-upstream.yml") | .id' |
+            --jq '.workflows[] | select(.state == "active") | select(.path | IN(
+                ".github/workflows/sync-upstream.yml",
+                ".github/workflows/otari-tests.yml",
+                ".github/workflows/otari-lint.yml",
+                ".github/workflows/otari-typecheck.yml",
+                ".github/workflows/otari-pr-title.yml",
+                ".github/workflows/otari-dashboard.yml"
+              ) | not) | .id' |
           while read -r id; do
             gh api -X PUT "repos/$REPO/actions/workflows/$id/disable" && echo "disabled workflow $id"
           done
