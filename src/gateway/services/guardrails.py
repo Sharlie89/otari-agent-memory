@@ -38,15 +38,19 @@ import time
 from collections import OrderedDict
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import httpx
 
+from gateway.core.env import otari_env
 from gateway.models.guardrails import GuardrailConfig
 from gateway.services.providers import OwnedEndpointTransport
 from gateway.services.tool_usage import TOOL_ERROR_SENTINEL
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 from gateway.types.traces import is_identifier
+
+if TYPE_CHECKING:
+    from gateway.core.config import GatewayConfig
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +127,16 @@ def reported_categories(raw: object) -> tuple[str, ...]:
             if len(kept) == _MAX_CATEGORIES:
                 break
     return tuple(kept)
+
+
+def deployment_guardrails_url(config: GatewayConfig | None) -> str | None:
+    """The deployment's guardrails service, where an entry that names no endpoint of its own is sent.
+
+    The dashboard's override, the config file or the environment, in that order; a dashboard override mutates
+    ``config``, so it applies on the next check. The environment is read as well for a caller with no config,
+    such as a unit test.
+    """
+    return (config.guardrails_url if config is not None else None) or otari_env("GUARDRAILS_URL") or None
 
 
 def _unevaluated_detail(profile: str) -> str:

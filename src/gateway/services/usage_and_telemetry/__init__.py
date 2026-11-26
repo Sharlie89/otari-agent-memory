@@ -5,6 +5,7 @@
 """
 
 from gateway.repositories.usage_and_telemetry import ServedTraffic, UsageFilters, UsageScope
+from gateway.services.usage_and_telemetry._memory_usage import MemoryUsageLedger, MemoryUsageMeter
 from gateway.services.usage_and_telemetry._service import UsageService
 from gateway.services.usage_and_telemetry._speed import OfferingSpeed
 from gateway.services.usage_and_telemetry._video_usage_writer import VideoUsageWriter
@@ -20,6 +21,8 @@ from gateway.services.usage_and_telemetry._window import (
 __all__ = [
     "MAX_SERIES_POINTS",
     "SERIES_TOP_N",
+    "MemoryUsageLedger",
+    "MemoryUsageMeter",
     "OfferingSpeed",
     "ServedTraffic",
     "UsageFilters",

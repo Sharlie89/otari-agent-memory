@@ -2359,6 +2359,64 @@
         "title": "AppTokenResponse",
         "type": "object"
       },
+      "ArmSummaryPublic": {
+        "description": "One arm of the savings experiment, per session.",
+        "properties": {
+          "cache_read_tokens_per_session": {
+            "title": "Cache Read Tokens Per Session",
+            "type": "number"
+          },
+          "cost_per_session": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "USD; null where a session's model has no price.",
+            "title": "Cost Per Session"
+          },
+          "input_tokens_per_session": {
+            "title": "Input Tokens Per Session",
+            "type": "number"
+          },
+          "median_tokens_per_session": {
+            "title": "Median Tokens Per Session",
+            "type": "number"
+          },
+          "output_tokens_per_session": {
+            "title": "Output Tokens Per Session",
+            "type": "number"
+          },
+          "requests_per_session": {
+            "title": "Requests Per Session",
+            "type": "number"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "tokens_per_session": {
+            "description": "Input and output tokens, cached input counted once.",
+            "title": "Tokens Per Session",
+            "type": "number"
+          }
+        },
+        "required": [
+          "sessions",
+          "requests_per_session",
+          "tokens_per_session",
+          "median_tokens_per_session",
+          "input_tokens_per_session",
+          "output_tokens_per_session",
+          "cache_read_tokens_per_session",
+          "cost_per_session"
+        ],
+        "title": "ArmSummaryPublic",
+        "type": "object"
+      },
       "AudioContent": {
         "description": "Audio provided to or from an LLM.",
         "properties": {
@@ -3923,6 +3981,14 @@
       "CatalogFacets": {
         "description": "The filter rail's choices, from the caller's whole authorized catalog rather than one page.",
         "properties": {
+          "data_locations": {
+            "description": "Every data location a hosted provider declares for an authorized model, as listed, sorted.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Locations",
+            "type": "array"
+          },
           "providers": {
             "description": "Every provider instance offering an authorized model, sorted.",
             "items": {
@@ -3999,6 +4065,14 @@
             ],
             "description": "The largest any offering serves.",
             "title": "Context Window"
+          },
+          "data_locations": {
+            "description": "Where the hosted providers offering it keep request data, as the operator declares it: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`, distinct and sorted. One entry per place a provider may serve it from, so a provider with several regions gives several. Providers that declare nothing, and every `providers:` instance and organization key, add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Locations",
+            "type": "array"
           },
           "default_pricing": {
             "description": "Whether an unpriced model is metered at the models.dev default.",
@@ -4303,6 +4377,14 @@
             "description": "The largest any offering serves.",
             "title": "Context Window"
           },
+          "data_locations": {
+            "description": "Where the hosted providers offering it keep request data, as the operator declares it: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`, distinct and sorted. One entry per place a provider may serve it from, so a provider with several regions gives several. Providers that declare nothing, and every `providers:` instance and organization key, add none.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Locations",
+            "type": "array"
+          },
           "deprecated": {
             "default": false,
             "description": "True only when every offering with metadata says so.",
@@ -4590,6 +4672,14 @@
           "credential": {
             "$ref": "#/components/schemas/CatalogCredential",
             "description": "Whose key serves it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one on the organization's own key, which it may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key."
+          },
+          "data_locations": {
+            "description": "Where a `hosted` offering's provider keeps request data, one entry per place it may serve from, distinct and sorted; empty where it declares none and for every other offering.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Data Locations",
+            "type": "array"
           },
           "discovered": {
             "description": "Whether the provider itself reported this model.",
@@ -6746,7 +6836,7 @@
             "title": "Reject User Mismatch"
           },
           "scopes": {
-            "description": "The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing else. The end-users scopes are a service key's alone.",
+            "description": "The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read', 'mcp:execute', 'memory:read' and 'memory:write': it calls models and tools, lists MCP servers and uses its workspace's memory, and nothing else. The end-users scopes are a service key's alone.",
             "items": {
               "$ref": "#/components/schemas/KeyScope"
             },
@@ -7124,7 +7214,7 @@
             "title": "Reject User Mismatch"
           },
           "scopes": {
-            "description": "The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing else. The end-users scopes are a service key's alone.",
+            "description": "The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read', 'mcp:execute', 'memory:read' and 'memory:write': it calls models and tools, lists MCP servers and uses its workspace's memory, and nothing else. The end-users scopes are a service key's alone.",
             "items": {
               "$ref": "#/components/schemas/KeyScope"
             },
@@ -8396,6 +8486,49 @@
           "count"
         ],
         "title": "DeploymentUsersPublic",
+        "type": "object"
+      },
+      "DifferencePublic": {
+        "description": "The memory arm's mean less the control arm's, with a 95% interval. Negative is a saving.",
+        "properties": {
+          "absolute": {
+            "title": "Absolute",
+            "type": "number"
+          },
+          "conclusive": {
+            "description": "Whether the interval leaves out no difference at all.",
+            "title": "Conclusive",
+            "type": "boolean"
+          },
+          "high": {
+            "title": "High",
+            "type": "number"
+          },
+          "low": {
+            "title": "Low",
+            "type": "number"
+          },
+          "relative": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "As a share of the control arm's mean.",
+            "title": "Relative"
+          }
+        },
+        "required": [
+          "absolute",
+          "relative",
+          "low",
+          "high",
+          "conclusive"
+        ],
+        "title": "DifferencePublic",
         "type": "object"
       },
       "DisabledReason": {
@@ -11014,6 +11147,131 @@
           "results"
         ],
         "title": "HealthCheckStatus",
+        "type": "object"
+      },
+      "HeldProposalPublic": {
+        "description": "A shared proposal waiting for an admin, what held it, and where it came from.",
+        "properties": {
+          "author_user_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The member whose agent proposed it.",
+            "title": "Author User Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ReviewedEntryPublic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The entry it would change: the one it contradicts, or the reviewed one it would replace. Approving it replaces this entry with it as a new version."
+          },
+          "expires_at": {
+            "description": "When it is deleted if nobody decides on it.",
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fact",
+              "decision",
+              "procedure"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The model the proposing agent ran on.",
+            "title": "Model"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "policy",
+                  "conflict",
+                  "higher_trust",
+                  "guardrail",
+                  "model",
+                  "guardrail_unavailable"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run.",
+            "title": "Reason"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Session Id"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "trust": {
+            "enum": [
+              "reviewed",
+              "agent",
+              "external"
+            ],
+            "title": "Trust",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "kind",
+          "trust",
+          "reason",
+          "author_user_id",
+          "session_id",
+          "model",
+          "created_at",
+          "expires_at",
+          "entry"
+        ],
+        "title": "HeldProposalPublic",
         "type": "object"
       },
       "HostedAvailableModelsPublic": {
@@ -14171,6 +14429,8 @@
           "code:execute",
           "mcp:read",
           "mcp:execute",
+          "memory:read",
+          "memory:write",
           "telemetry:write",
           "agents:write",
           "usage:read",
@@ -16160,6 +16420,167 @@
         "title": "MemberWorkspacePlacementPublic",
         "type": "object"
       },
+      "MemoryCallsPublic": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "calls",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "title": "MemoryCallsPublic",
+        "type": "object"
+      },
+      "MemoryExperimentPublic": {
+        "description": "What memory saves a workspace: sessions served without it against sessions served with it.\n\nCounts only requests that name their session, made through the gateway while the experiment ran.",
+        "properties": {
+          "control": {
+            "$ref": "#/components/schemas/ArmSummaryPublic"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifferencePublic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "USD per session; null without enough sessions or prices."
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "holdout_percent": {
+            "title": "Holdout Percent",
+            "type": "integer"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/ArmSummaryPublic"
+          },
+          "memory_call_tokens_per_session": {
+            "title": "Memory Call Tokens Per Session",
+            "type": "number"
+          },
+          "memory_calls": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/MemoryCallsPublic"
+            },
+            "description": "Memory's own model calls, by endpoint.",
+            "title": "Memory Calls",
+            "type": "object"
+          },
+          "min_sessions": {
+            "description": "Sessions each arm needs before the differences are estimated.",
+            "title": "Min Sessions",
+            "type": "integer"
+          },
+          "recalls": {
+            "description": "Turns automatic recall searched for.",
+            "title": "Recalls",
+            "type": "integer"
+          },
+          "recalls_with_results": {
+            "description": "Turns it added something to.",
+            "title": "Recalls With Results",
+            "type": "integer"
+          },
+          "searches": {
+            "description": "Searches agents ran with memory's tool.",
+            "title": "Searches",
+            "type": "integer"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DifferencePublic"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tokens per session, net of memory's own model calls; null until each arm has min_sessions."
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "holdout_percent",
+          "started_at",
+          "ended_at",
+          "min_sessions",
+          "control",
+          "memory",
+          "tokens",
+          "cost",
+          "memory_calls",
+          "memory_call_tokens_per_session",
+          "recalls",
+          "recalls_with_results",
+          "searches"
+        ],
+        "title": "MemoryExperimentPublic",
+        "type": "object"
+      },
+      "MemoryReviewQueuePublic": {
+        "description": "A workspace's shared proposals waiting for an admin, oldest first. A member's own are never listed.",
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/HeldProposalPublic"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data",
+          "count"
+        ],
+        "title": "MemoryReviewQueuePublic",
+        "type": "object"
+      },
       "Message": {
         "description": "A human-readable acknowledgment for an operation with nothing to return.",
         "properties": {
@@ -17007,9 +17428,31 @@
             "title": "Deployment Managed",
             "type": "boolean"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "knowledge_cutoff": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Knowledge Cutoff"
           },
           "max_output_tokens": {
             "anyOf": [
@@ -17056,6 +17499,17 @@
             "default": "none",
             "title": "Pricing Source",
             "type": "string"
+          },
+          "release_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Release Date"
           },
           "supported_parameters": {
             "anyOf": [
@@ -19384,6 +19838,12 @@
             "title": "Applies To All Workspaces",
             "type": "boolean"
           },
+          "applies_to_memory": {
+            "default": true,
+            "description": "True also runs this over what agents propose to agent memory in those workspaces, before it is kept; false checks requests only",
+            "title": "Applies To Memory",
+            "type": "boolean"
+          },
           "credential": {
             "anyOf": [
               {
@@ -19775,6 +20235,10 @@
             "title": "Applies To All Workspaces",
             "type": "boolean"
           },
+          "applies_to_memory": {
+            "title": "Applies To Memory",
+            "type": "boolean"
+          },
           "created_at": {
             "title": "Created At",
             "type": "string"
@@ -19885,6 +20349,7 @@
           "enabled",
           "applies_to_all_workspaces",
           "workspace_ids",
+          "applies_to_memory",
           "created_at",
           "updated_at"
         ],
@@ -19973,6 +20438,10 @@
         "properties": {
           "applies_to_all_workspaces": {
             "title": "Applies To All Workspaces",
+            "type": "boolean"
+          },
+          "applies_to_memory": {
+            "title": "Applies To Memory",
             "type": "boolean"
           },
           "credential": {
@@ -20160,6 +20629,46 @@
           "organization"
         ],
         "title": "OrganizationMembershipContextPublic",
+        "type": "object"
+      },
+      "OrganizationMemoryPublic": {
+        "description": "An organization's memory switch. Memory runs in a workspace while this, and the workspace's, are on.",
+        "properties": {
+          "deployment_enabled": {
+            "description": "Whether this deployment offers memory at all.",
+            "title": "Deployment Enabled",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "organization_id": {
+            "format": "uuid",
+            "title": "Organization Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "organization_id",
+          "deployment_enabled",
+          "enabled"
+        ],
+        "title": "OrganizationMemoryPublic",
+        "type": "object"
+      },
+      "OrganizationMemoryUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "OrganizationMemoryUpdate",
         "type": "object"
       },
       "OrganizationModelPricingCreate": {
@@ -24925,6 +25434,41 @@
           "input"
         ],
         "title": "ResponsesRequest",
+        "type": "object"
+      },
+      "ReviewedEntryPublic": {
+        "description": "The entry a held proposal would change, as it reads now.",
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "trust": {
+            "enum": [
+              "reviewed",
+              "agent",
+              "external"
+            ],
+            "title": "Trust",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "text",
+          "version",
+          "trust"
+        ],
+        "title": "ReviewedEntryPublic",
         "type": "object"
       },
       "RotateMasterKeyRequest": {
@@ -32395,12 +32939,12 @@
             "description": "The first request that succeeded, which is the guide's receipt. Null until one does."
           },
           "dismissed": {
-            "description": "Whether someone skipped the guide for this workspace.",
+            "description": "Whether the guide was skipped: for the workspace, or for a member who does not manage it, by that member.",
             "title": "Dismissed",
             "type": "boolean"
           },
           "experience_eligible": {
-            "description": "Whether the dashboard should offer the guide to this caller right now: the deployment has it enabled, the workspace is classified for it, nobody dismissed it, no request has succeeded yet, and the caller may manage the workspace.",
+            "description": "Whether the dashboard should offer the guide to this caller right now: the deployment has it enabled, the workspace is classified for it, and the caller may run requests there. For someone who manages the workspace, nobody dismissed it and no request in the workspace has succeeded yet; for a member who does not, they have not dismissed it and no request of their own has succeeded yet.",
             "title": "Experience Eligible",
             "type": "boolean"
           },
@@ -32427,7 +32971,7 @@
             "description": "The most recent request, so a failure can be reported while the guide keeps waiting."
           },
           "status": {
-            "description": "'activated' once a gateway request in this workspace has succeeded, 'failed' when the last one failed and none has yet succeeded, 'waiting' when there has been none at all.",
+            "description": "'activated' once a gateway request in this workspace has succeeded, 'failed' when the last one failed and none has yet succeeded, 'waiting' when there has been none at all. For a member who does not manage the workspace, only their own requests count.",
             "enum": [
               "waiting",
               "failed",
@@ -34210,6 +34754,326 @@
           "count"
         ],
         "title": "WorkspaceMembersPublic",
+        "type": "object"
+      },
+      "WorkspaceMemoryErased": {
+        "properties": {
+          "entries": {
+            "title": "Entries",
+            "type": "integer"
+          },
+          "keys": {
+            "title": "Keys",
+            "type": "integer"
+          },
+          "proposals": {
+            "title": "Proposals",
+            "type": "integer"
+          },
+          "reads": {
+            "title": "Reads",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "entries",
+          "proposals",
+          "reads",
+          "keys"
+        ],
+        "title": "WorkspaceMemoryErased",
+        "type": "object"
+      },
+      "WorkspaceMemoryPublic": {
+        "description": "A workspace's memory switches, what the deployment allows, and how much the workspace holds.",
+        "properties": {
+          "auto_recall": {
+            "description": "Search memory for each request's newest user turn and add what is alike enough to it, with no tool call.",
+            "title": "Auto Recall",
+            "type": "boolean"
+          },
+          "deployment_enabled": {
+            "description": "Whether this deployment offers memory at all.",
+            "title": "Deployment Enabled",
+            "type": "boolean"
+          },
+          "deployment_retention_days": {
+            "title": "Deployment Retention Days",
+            "type": "integer"
+          },
+          "enabled": {
+            "description": "Memory on for this workspace: each member's own entries.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "entries": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "Entry versions the workspace holds, by status.",
+            "title": "Entries",
+            "type": "object"
+          },
+          "experiment_ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it stopped; null while it runs.",
+            "title": "Experiment Ended At"
+          },
+          "experiment_holdout_percent": {
+            "description": "The share of sessions the running savings experiment serves without memory; 0 while none runs.",
+            "title": "Experiment Holdout Percent",
+            "type": "integer"
+          },
+          "experiment_started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the last savings experiment began.",
+            "title": "Experiment Started At"
+          },
+          "hide_external": {
+            "description": "Keep entries resting on outside content out of recall.",
+            "title": "Hide External",
+            "type": "boolean"
+          },
+          "offer_to_every_request": {
+            "description": "Offer memory's tools to every request a member sends through the gateway, not only to one that asks for them.",
+            "title": "Offer To Every Request",
+            "type": "boolean"
+          },
+          "organization_enabled": {
+            "description": "Whether the workspace's organization has memory on.",
+            "title": "Organization Enabled",
+            "type": "boolean"
+          },
+          "proposals_held": {
+            "description": "Shared proposals waiting for an admin's review.",
+            "title": "Proposals Held",
+            "type": "integer"
+          },
+          "proposals_waiting": {
+            "description": "Proposals the consolidator has not decided yet, those an admin approved included.",
+            "title": "Proposals Waiting",
+            "type": "integer"
+          },
+          "recall_max_entries": {
+            "description": "The most entries automatic recall adds to one turn.",
+            "title": "Recall Max Entries",
+            "type": "integer"
+          },
+          "recall_min_relevance": {
+            "description": "The score an entry must reach where relevance is checked.",
+            "title": "Recall Min Relevance",
+            "type": "number"
+          },
+          "recall_min_similarity": {
+            "description": "How alike an entry must be to the turn to be added, 0.3-0.99.",
+            "title": "Recall Min Similarity",
+            "type": "number"
+          },
+          "recall_rerank": {
+            "description": "Have the deployment's rerank model score the entries most alike to the turn, and add only those relevant enough; the similarity floor then no longer applies.",
+            "title": "Recall Rerank",
+            "type": "boolean"
+          },
+          "recall_rerank_skip_similarity": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Where relevance is checked: when the most alike entry is at least this alike, 0.3-0.99, hand over by similarity without the rerank model's call. Null checks every turn.",
+            "title": "Recall Rerank Skip Similarity"
+          },
+          "rerank_available": {
+            "description": "Whether the deployment names a rerank model, without which relevance is not checked.",
+            "title": "Rerank Available",
+            "type": "boolean"
+          },
+          "retention_days": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Days an unused entry is kept; null keeps the deployment's.",
+            "title": "Retention Days"
+          },
+          "workspace_id": {
+            "format": "uuid",
+            "title": "Workspace Id",
+            "type": "string"
+          },
+          "workspace_scope_enabled": {
+            "description": "The memory every member's agents share.",
+            "title": "Workspace Scope Enabled",
+            "type": "boolean"
+          },
+          "write_policy": {
+            "description": "auto keeps what the consolidator decides; review holds every shared proposal for an admin.",
+            "enum": [
+              "auto",
+              "review"
+            ],
+            "title": "Write Policy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workspace_id",
+          "deployment_enabled",
+          "organization_enabled",
+          "enabled",
+          "workspace_scope_enabled",
+          "write_policy",
+          "offer_to_every_request",
+          "hide_external",
+          "retention_days",
+          "deployment_retention_days",
+          "auto_recall",
+          "recall_min_similarity",
+          "recall_max_entries",
+          "recall_rerank",
+          "recall_min_relevance",
+          "recall_rerank_skip_similarity",
+          "rerank_available",
+          "experiment_holdout_percent",
+          "experiment_started_at",
+          "experiment_ended_at",
+          "entries",
+          "proposals_waiting",
+          "proposals_held"
+        ],
+        "title": "WorkspaceMemoryPublic",
+        "type": "object"
+      },
+      "WorkspaceMemoryUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_recall": {
+            "default": false,
+            "title": "Auto Recall",
+            "type": "boolean"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "experiment_holdout_percent": {
+            "default": 0,
+            "description": "Serve this share of sessions without memory to measure what it saves. A new share starts the experiment afresh; 0 stops it and keeps its results.",
+            "maximum": 50.0,
+            "minimum": 0.0,
+            "title": "Experiment Holdout Percent",
+            "type": "integer"
+          },
+          "hide_external": {
+            "default": false,
+            "title": "Hide External",
+            "type": "boolean"
+          },
+          "offer_to_every_request": {
+            "default": false,
+            "title": "Offer To Every Request",
+            "type": "boolean"
+          },
+          "recall_max_entries": {
+            "default": 3,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Recall Max Entries",
+            "type": "integer"
+          },
+          "recall_min_relevance": {
+            "default": 0.8,
+            "maximum": 0.99,
+            "minimum": 0.05,
+            "title": "Recall Min Relevance",
+            "type": "number"
+          },
+          "recall_min_similarity": {
+            "default": 0.65,
+            "maximum": 0.99,
+            "minimum": 0.3,
+            "title": "Recall Min Similarity",
+            "type": "number"
+          },
+          "recall_rerank": {
+            "default": false,
+            "title": "Recall Rerank",
+            "type": "boolean"
+          },
+          "recall_rerank_skip_similarity": {
+            "anyOf": [
+              {
+                "maximum": 0.99,
+                "minimum": 0.3,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recall Rerank Skip Similarity"
+          },
+          "retention_days": {
+            "anyOf": [
+              {
+                "maximum": 3650.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retention Days"
+          },
+          "workspace_scope_enabled": {
+            "default": false,
+            "title": "Workspace Scope Enabled",
+            "type": "boolean"
+          },
+          "write_policy": {
+            "default": "review",
+            "enum": [
+              "auto",
+              "review"
+            ],
+            "title": "Write Policy",
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "WorkspaceMemoryUpdate",
         "type": "object"
       },
       "WorkspaceProviderKeyOverridePublic": {
@@ -38655,6 +39519,21 @@
               "description": "Only models at least one provider declared to keep no prompt or completion data offers.",
               "title": "Zero Data Retention",
               "type": "boolean"
+            }
+          },
+          {
+            "description": "Only models a hosted provider serves from one of these data locations: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`. Matched as a workspace's `allowed_data_locations` is, so `EU` also matches each EU member state and `GLOBAL` only `GLOBAL`. A model whose location is undeclared matches none.",
+            "in": "query",
+            "name": "data_location",
+            "required": false,
+            "schema": {
+              "description": "Only models a hosted provider serves from one of these data locations: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`. Matched as a workspace's `allowed_data_locations` is, so `EU` also matches each EU member state and `GLOBAL` only `GLOBAL`. A model whose location is undeclared matches none.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 100,
+              "title": "Data Location",
+              "type": "array"
             }
           },
           {
@@ -45298,6 +46177,78 @@
         ]
       }
     },
+    "/api/v1/memory/mcp": {
+      "get": {
+        "description": "No server-to-client stream: every answer comes back on the POST that asked.",
+        "operationId": "memory-memory_mcp_stream",
+        "responses": {
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "No stream."
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Memory Mcp Stream",
+        "tags": [
+          "memory"
+        ],
+        "x-otari-key-scopes": [
+          "memory:read"
+        ]
+      },
+      "post": {
+        "description": "Answer one MCP JSON-RPC message: initialize, ping, tools/list or tools/call.",
+        "operationId": "memory-memory_mcp",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "description": "A notification, which has no response."
+          },
+          "403": {
+            "description": "The key names no member of its workspace."
+          },
+          "413": {
+            "description": "The message exceeds 64 KiB."
+          },
+          "415": {
+            "description": "Only application/json is accepted."
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Memory Mcp",
+        "tags": [
+          "memory"
+        ],
+        "x-otari-key-scopes": [
+          "memory:read"
+        ]
+      }
+    },
     "/api/v1/messages": {
       "post": {
         "description": "Anthropic Messages API-compatible endpoint.\n\nSupports MCP tool-use loops, sandboxed code execution, and SearXNG\nweb_search.",
@@ -49062,6 +50013,84 @@
         "summary": "List Caller Organization Memberships",
         "tags": [
           "organizations"
+        ]
+      }
+    },
+    "/api/v1/organizations/me/memory": {
+      "get": {
+        "description": "The caller's organization's memory switch. Its owners and admins only.",
+        "operationId": "memory-get_organization_memory",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemoryPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Organization Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "put": {
+        "description": "Turn memory on or off for every workspace of the caller's organization. Off deletes nothing.\n\nOn lets each workspace's managers turn it on for their workspace; off stops recall in all of them at once.",
+        "operationId": "memory-set_organization_memory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizationMemoryUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMemoryPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Set Organization Memory",
+        "tags": [
+          "memory"
         ]
       }
     },
@@ -63861,7 +64890,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/activation/dismiss": {
       "post": {
-        "description": "Retire the guide for this workspace. Permanent, and idempotent.\n\nWorkspace owners and admins only. It retires the card and nothing else: the\nkey the guide issued keeps working, because the operator asked for it and\nmay well have pasted it somewhere already. Revoking one is the Keys page's\njob.",
+        "description": "Retire the guide for this workspace. Permanent, and idempotent.\n\nFor a member who does not manage the workspace, for them alone; a viewer is\nrefused. It retires the card and nothing else: the key the guide issued\nkeeps working, because the operator asked for it and may well have pasted it\nsomewhere already. Revoking one is the Keys page's job.",
         "operationId": "workspace-activation-dismiss_workspace_activation",
         "parameters": [
           {
@@ -63913,7 +64942,7 @@
     },
     "/api/v1/workspaces/{workspace_id}/activation/key": {
       "post": {
-        "description": "Issue the workspace's setup API key, rotating the one the guide already issued.\n\nWorkspace owners and admins only, like every other action that changes a\nworkspace. The plaintext is returned once and never stored, so a reopened\nguide rotates the same key row rather than collecting a second one, and\nanswers 409 once the workspace has activated or the guide was dismissed.",
+        "description": "Issue the setup API key, rotating the one the guide already issued.\n\nThe workspace's for its owners and admins, the caller's own for a member who\ndoes not manage it; a viewer is refused. The plaintext is returned once and\nnever stored, so a reopened guide rotates the same key row rather than\ncollecting a second one, and answers 409 once the guide is finished or was\ndismissed.",
         "operationId": "workspace-activation-create_workspace_activation_key",
         "parameters": [
           {
@@ -67141,6 +68170,381 @@
         "summary": "Add Workspace Member",
         "tags": [
           "workspaces"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/memory": {
+      "delete": {
+        "description": "Delete everything a workspace's memory holds, and the data keys it was sealed under.\n\nWith the keys gone, nothing deleted opens from a backup either. The switches stay as they were.",
+        "operationId": "memory-erase_workspace_memory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMemoryErased"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Erase Workspace Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "get": {
+        "description": "A workspace's memory switches and how much it holds. An organization owner/admin, or this workspace's.",
+        "operationId": "memory-get_workspace_memory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMemoryPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Workspace Memory",
+        "tags": [
+          "memory"
+        ]
+      },
+      "put": {
+        "description": "Set a workspace's memory switches. Turning memory off stops recall at once and deletes nothing.\n\nAn organization owner/admin, or an owner/admin of this workspace, may.",
+        "operationId": "memory-set_workspace_memory",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceMemoryUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceMemoryPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Set Workspace Memory",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/memory/experiment": {
+      "get": {
+        "description": "What memory saves this workspace: its sessions served without memory against those served with it.\n\nThe running savings experiment, or the last one once stopped. The same managers as the switches.",
+        "operationId": "memory-get_memory_experiment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryExperimentPublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Memory Experiment",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/memory/review": {
+      "get": {
+        "description": "The workspace's shared proposals the consolidator held for an admin, oldest first, opened.\n\nThe same managers as the switches. A member's own proposals are never listed, nor held.",
+        "operationId": "memory-get_memory_review_queue",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryReviewQueuePublic"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Get Memory Review Queue",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/memory/review/{proposal_id}/approve": {
+      "post": {
+        "description": "Vouch for a held proposal: the consolidator's next pass applies it as reviewed.\n\nNeither the review policy nor a mandated guardrail holds it again. One held over an entry, a conflict or a\nchange to a reviewed entry, replaces that entry as its next version.",
+        "operationId": "memory-approve_memory_proposal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The workspace has no shared proposal waiting for review by that id."
+          },
+          "422": {
+            "description": "It carries what memory never keeps, which no approval lets in."
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Approve Memory Proposal",
+        "tags": [
+          "memory"
+        ]
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/memory/review/{proposal_id}/discard": {
+      "post": {
+        "description": "Delete a held proposal. It cannot be undone.",
+        "operationId": "memory-discard_memory_proposal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "proposal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Proposal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "The workspace has no shared proposal waiting for review by that id."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyAuth": []
+          },
+          {
+            "XApiKeyAuth": []
+          }
+        ],
+        "summary": "Discard Memory Proposal",
+        "tags": [
+          "memory"
         ]
       }
     },

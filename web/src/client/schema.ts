@@ -3178,6 +3178,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/memory/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Memory Mcp Stream
+         * @description No server-to-client stream: every answer comes back on the POST that asked.
+         */
+        get: operations["memory-memory_mcp_stream"];
+        put?: never;
+        /**
+         * Memory Mcp
+         * @description Answer one MCP JSON-RPC message: initialize, ping, tools/list or tools/call.
+         */
+        post: operations["memory-memory_mcp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/messages": {
         parameters: {
             query?: never;
@@ -4440,6 +4464,32 @@ export interface paths {
          */
         get: operations["organizations-list_caller_organization_memberships"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/organizations/me/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Memory
+         * @description The caller's organization's memory switch. Its owners and admins only.
+         */
+        get: operations["memory-get_organization_memory"];
+        /**
+         * Set Organization Memory
+         * @description Turn memory on or off for every workspace of the caller's organization. Off deletes nothing.
+         *
+         *     On lets each workspace's managers turn it on for their workspace; off stops recall in all of them at once.
+         */
+        put: operations["memory-set_organization_memory"];
         post?: never;
         delete?: never;
         options?: never;
@@ -8232,10 +8282,10 @@ export interface paths {
          * Dismiss Workspace Activation
          * @description Retire the guide for this workspace. Permanent, and idempotent.
          *
-         *     Workspace owners and admins only. It retires the card and nothing else: the
-         *     key the guide issued keeps working, because the operator asked for it and
-         *     may well have pasted it somewhere already. Revoking one is the Keys page's
-         *     job.
+         *     For a member who does not manage the workspace, for them alone; a viewer is
+         *     refused. It retires the card and nothing else: the key the guide issued
+         *     keeps working, because the operator asked for it and may well have pasted it
+         *     somewhere already. Revoking one is the Keys page's job.
          */
         post: operations["workspace-activation-dismiss_workspace_activation"];
         delete?: never;
@@ -8255,12 +8305,13 @@ export interface paths {
         put?: never;
         /**
          * Create Workspace Activation Key
-         * @description Issue the workspace's setup API key, rotating the one the guide already issued.
+         * @description Issue the setup API key, rotating the one the guide already issued.
          *
-         *     Workspace owners and admins only, like every other action that changes a
-         *     workspace. The plaintext is returned once and never stored, so a reopened
-         *     guide rotates the same key row rather than collecting a second one, and
-         *     answers 409 once the workspace has activated or the guide was dismissed.
+         *     The workspace's for its owners and admins, the caller's own for a member who
+         *     does not manage it; a viewer is refused. The plaintext is returned once and
+         *     never stored, so a reopened guide rotates the same key row rather than
+         *     collecting a second one, and answers 409 once the guide is finished or was
+         *     dismissed.
          */
         post: operations["workspace-activation-create_workspace_activation_key"];
         delete?: never;
@@ -9138,6 +9189,125 @@ export interface paths {
          * @description Change a workspace member's role.
          */
         patch: operations["workspaces-update_workspace_member_role"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workspace Memory
+         * @description A workspace's memory switches and how much it holds. An organization owner/admin, or this workspace's.
+         */
+        get: operations["memory-get_workspace_memory"];
+        /**
+         * Set Workspace Memory
+         * @description Set a workspace's memory switches. Turning memory off stops recall at once and deletes nothing.
+         *
+         *     An organization owner/admin, or an owner/admin of this workspace, may.
+         */
+        put: operations["memory-set_workspace_memory"];
+        post?: never;
+        /**
+         * Erase Workspace Memory
+         * @description Delete everything a workspace's memory holds, and the data keys it was sealed under.
+         *
+         *     With the keys gone, nothing deleted opens from a backup either. The switches stay as they were.
+         */
+        delete: operations["memory-erase_workspace_memory"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/memory/experiment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory Experiment
+         * @description What memory saves this workspace: its sessions served without memory against those served with it.
+         *
+         *     The running savings experiment, or the last one once stopped. The same managers as the switches.
+         */
+        get: operations["memory-get_memory_experiment"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/memory/review": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Memory Review Queue
+         * @description The workspace's shared proposals the consolidator held for an admin, oldest first, opened.
+         *
+         *     The same managers as the switches. A member's own proposals are never listed, nor held.
+         */
+        get: operations["memory-get_memory_review_queue"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/memory/review/{proposal_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Memory Proposal
+         * @description Vouch for a held proposal: the consolidator's next pass applies it as reviewed.
+         *
+         *     Neither the review policy nor a mandated guardrail holds it again. One held over an entry, a conflict or a
+         *     change to a reviewed entry, replaces that entry as its next version.
+         */
+        post: operations["memory-approve_memory_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/memory/review/{proposal_id}/discard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Discard Memory Proposal
+         * @description Delete a held proposal. It cannot be undone.
+         */
+        post: operations["memory-discard_memory_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/workspaces/{workspace_id}/provider-keys": {
@@ -10549,6 +10719,34 @@ export interface components {
             token_type: "Bearer";
         };
         /**
+         * ArmSummaryPublic
+         * @description One arm of the savings experiment, per session.
+         */
+        ArmSummaryPublic: {
+            /** Cache Read Tokens Per Session */
+            cache_read_tokens_per_session: number;
+            /**
+             * Cost Per Session
+             * @description USD; null where a session's model has no price.
+             */
+            cost_per_session: number | null;
+            /** Input Tokens Per Session */
+            input_tokens_per_session: number;
+            /** Median Tokens Per Session */
+            median_tokens_per_session: number;
+            /** Output Tokens Per Session */
+            output_tokens_per_session: number;
+            /** Requests Per Session */
+            requests_per_session: number;
+            /** Sessions */
+            sessions: number;
+            /**
+             * Tokens Per Session
+             * @description Input and output tokens, cached input counted once.
+             */
+            tokens_per_session: number;
+        };
+        /**
          * AudioContent
          * @description Audio provided to or from an LLM.
          */
@@ -11373,6 +11571,11 @@ export interface components {
          */
         CatalogFacets: {
             /**
+             * Data Locations
+             * @description Every data location a hosted provider declares for an authorized model, as listed, sorted.
+             */
+            data_locations?: string[];
+            /**
              * Providers
              * @description Every provider instance offering an authorized model, sorted.
              */
@@ -11403,6 +11606,11 @@ export interface components {
              * @description The largest any offering serves.
              */
             context_window?: number | null;
+            /**
+             * Data Locations
+             * @description Where the hosted providers offering it keep request data, as the operator declares it: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`, distinct and sorted. One entry per place a provider may serve it from, so a provider with several regions gives several. Providers that declare nothing, and every `providers:` instance and organization key, add none.
+             */
+            data_locations?: string[];
             /**
              * Default Pricing
              * @description Whether an unpriced model is metered at the models.dev default.
@@ -11524,6 +11732,11 @@ export interface components {
              */
             context_window?: number | null;
             /**
+             * Data Locations
+             * @description Where the hosted providers offering it keep request data, as the operator declares it: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`, distinct and sorted. One entry per place a provider may serve it from, so a provider with several regions gives several. Providers that declare nothing, and every `providers:` instance and organization key, add none.
+             */
+            data_locations?: string[];
+            /**
              * Deprecated
              * @description True only when every offering with metadata says so.
              * @default false
@@ -11634,6 +11847,11 @@ export interface components {
             context_window?: number | null;
             /** @description Whose key serves it: `deployment` for a `providers:` instance the operator configured, `hosted` for a provider the deployment pays for in any workspace of the viewer's organization, `organization` for one on the organization's own key, which it may set its own rate for. A workspace can still call a `hosted` provider with the organization's own key. */
             credential: components["schemas"]["CatalogCredential"];
+            /**
+             * Data Locations
+             * @description Where a `hosted` offering's provider keeps request data, one entry per place it may serve from, distinct and sorted; empty where it declares none and for every other offering.
+             */
+            data_locations?: string[];
             /**
              * Discovered
              * @description Whether the provider itself reported this model.
@@ -12576,7 +12794,7 @@ export interface components {
             reject_user_mismatch?: boolean | null;
             /**
              * Scopes
-             * @description The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing else. The end-users scopes are a service key's alone.
+             * @description The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read', 'mcp:execute', 'memory:read' and 'memory:write': it calls models and tools, lists MCP servers and uses its workspace's memory, and nothing else. The end-users scopes are a service key's alone.
              */
             scopes?: components["schemas"]["KeyScope"][];
             /**
@@ -12713,7 +12931,7 @@ export interface components {
             reject_user_mismatch?: boolean | null;
             /**
              * Scopes
-             * @description The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read' and 'mcp:execute': it calls models and tools and lists MCP servers, and nothing else. The end-users scopes are a service key's alone.
+             * @description The endpoint groups the key may reach. Omitted, the key gets 'inference:run', 'web:search', 'web:fetch', 'code:execute', 'mcp:read', 'mcp:execute', 'memory:read' and 'memory:write': it calls models and tools, lists MCP servers and uses its workspace's memory, and nothing else. The end-users scopes are a service key's alone.
              */
             scopes?: components["schemas"]["KeyScope"][];
             /**
@@ -13367,6 +13585,28 @@ export interface components {
             count: number;
             /** Data */
             data: components["schemas"]["DeploymentUserPublic"][];
+        };
+        /**
+         * DifferencePublic
+         * @description The memory arm's mean less the control arm's, with a 95% interval. Negative is a saving.
+         */
+        DifferencePublic: {
+            /** Absolute */
+            absolute: number;
+            /**
+             * Conclusive
+             * @description Whether the interval leaves out no difference at all.
+             */
+            conclusive: boolean;
+            /** High */
+            high: number;
+            /** Low */
+            low: number;
+            /**
+             * Relative
+             * @description As a share of the control arm's mean.
+             */
+            relative: number | null;
         };
         /**
          * DisabledReason
@@ -14659,6 +14899,59 @@ export interface components {
             results: components["schemas"]["HealthCheckResultPublic"][];
             running: components["schemas"]["HealthCheckRunPublic"] | null;
             settings: components["schemas"]["HealthCheckSettingsPublic"];
+        };
+        /**
+         * HeldProposalPublic
+         * @description A shared proposal waiting for an admin, what held it, and where it came from.
+         */
+        HeldProposalPublic: {
+            /**
+             * Author User Id
+             * @description The member whose agent proposed it.
+             */
+            author_user_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** @description The entry it would change: the one it contradicts, or the reviewed one it would replace. Approving it replaces this entry with it as a new version. */
+            entry: components["schemas"]["ReviewedEntryPublic"] | null;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When it is deleted if nobody decides on it.
+             */
+            expires_at: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "fact" | "decision" | "procedure";
+            /**
+             * Model
+             * @description The model the proposing agent ran on.
+             */
+            model: string | null;
+            /**
+             * Reason
+             * @description policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run.
+             */
+            reason: ("policy" | "conflict" | "higher_trust" | "guardrail" | "model" | "guardrail_unavailable") | null;
+            /** Session Id */
+            session_id: string | null;
+            /** Text */
+            text: string;
+            /**
+             * Trust
+             * @enum {string}
+             */
+            trust: "reviewed" | "agent" | "external";
         };
         /**
          * HostedAvailableModelsPublic
@@ -16046,7 +16339,7 @@ export interface components {
          *     only a service key may hold them.
          * @enum {string}
          */
-        KeyScope: "inference:run" | "files:read" | "files:write" | "batches:read" | "batches:write" | "web:search" | "web:fetch" | "code:execute" | "mcp:read" | "mcp:execute" | "telemetry:write" | "agents:write" | "usage:read" | "usage:write" | "end-users:read" | "end-users:write" | "end-users:delete";
+        KeyScope: "inference:run" | "files:read" | "files:write" | "batches:read" | "batches:write" | "web:search" | "web:fetch" | "code:execute" | "mcp:read" | "mcp:execute" | "memory:read" | "memory:write" | "telemetry:write" | "agents:write" | "usage:read" | "usage:write" | "end-users:read" | "end-users:write" | "end-users:delete";
         /**
          * KnownProviderSchema
          * @description A selected provider's autofill hints for the add-provider form.
@@ -17134,6 +17427,79 @@ export interface components {
             /** Workspace Name */
             workspace_name: string;
         };
+        /** MemoryCallsPublic */
+        MemoryCallsPublic: {
+            /** Calls */
+            calls: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Output Tokens */
+            output_tokens: number;
+        };
+        /**
+         * MemoryExperimentPublic
+         * @description What memory saves a workspace: sessions served without it against sessions served with it.
+         *
+         *     Counts only requests that name their session, made through the gateway while the experiment ran.
+         */
+        MemoryExperimentPublic: {
+            control: components["schemas"]["ArmSummaryPublic"];
+            /** @description USD per session; null without enough sessions or prices. */
+            cost: components["schemas"]["DifferencePublic"] | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Holdout Percent */
+            holdout_percent: number;
+            memory: components["schemas"]["ArmSummaryPublic"];
+            /** Memory Call Tokens Per Session */
+            memory_call_tokens_per_session: number;
+            /**
+             * Memory Calls
+             * @description Memory's own model calls, by endpoint.
+             */
+            memory_calls: {
+                [key: string]: components["schemas"]["MemoryCallsPublic"];
+            };
+            /**
+             * Min Sessions
+             * @description Sessions each arm needs before the differences are estimated.
+             */
+            min_sessions: number;
+            /**
+             * Recalls
+             * @description Turns automatic recall searched for.
+             */
+            recalls: number;
+            /**
+             * Recalls With Results
+             * @description Turns it added something to.
+             */
+            recalls_with_results: number;
+            /**
+             * Searches
+             * @description Searches agents ran with memory's tool.
+             */
+            searches: number;
+            /** Started At */
+            started_at: string | null;
+            /** @description Tokens per session, net of memory's own model calls; null until each arm has min_sessions. */
+            tokens: components["schemas"]["DifferencePublic"] | null;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /**
+         * MemoryReviewQueuePublic
+         * @description A workspace's shared proposals waiting for an admin, oldest first. A member's own are never listed.
+         */
+        MemoryReviewQueuePublic: {
+            /** Count */
+            count: number;
+            /** Data */
+            data: components["schemas"]["HeldProposalPublic"][];
+        };
         /**
          * Message
          * @description A human-readable acknowledgment for an operation with nothing to return.
@@ -17442,8 +17808,12 @@ export interface components {
              * @default false
              */
             deployment_managed: boolean;
+            /** Description */
+            description?: string | null;
             /** Id */
             id: string;
+            /** Knowledge Cutoff */
+            knowledge_cutoff?: string | null;
             /** Max Output Tokens */
             max_output_tokens?: number | null;
             /** Name */
@@ -17461,6 +17831,8 @@ export interface components {
              * @default none
              */
             pricing_source: string;
+            /** Release Date */
+            release_date?: string | null;
             /** Supported Parameters */
             supported_parameters?: string[] | null;
             /** Type */
@@ -18565,6 +18937,12 @@ export interface components {
              */
             applies_to_all_workspaces: boolean;
             /**
+             * Applies To Memory
+             * @description True also runs this over what agents propose to agent memory in those workspaces, before it is kept; false checks requests only
+             * @default true
+             */
+            applies_to_memory: boolean;
+            /**
              * Credential
              * @description Bearer credential for this entry's endpoint. Requires url to be set, and https: an entry with no endpoint of its own falls back to the deployment's guardrails_url, which is commonly a same-host http sidecar. Encrypted at rest, never returned
              */
@@ -18822,6 +19200,8 @@ export interface components {
         OrganizationGuardrailPublic: {
             /** Applies To All Workspaces */
             applies_to_all_workspaces: boolean;
+            /** Applies To Memory */
+            applies_to_memory: boolean;
             /** Created At */
             created_at: string;
             /** Definition Id */
@@ -18929,6 +19309,8 @@ export interface components {
         OrganizationGuardrailUpdate: {
             /** Applies To All Workspaces */
             applies_to_all_workspaces?: boolean;
+            /** Applies To Memory */
+            applies_to_memory?: boolean;
             /** Credential */
             credential?: string | null;
             /**
@@ -19002,6 +19384,29 @@ export interface components {
             status: string;
             /** Workspace Memberships */
             workspace_memberships?: components["schemas"]["CallerWorkspaceMembershipPublic"][];
+        };
+        /**
+         * OrganizationMemoryPublic
+         * @description An organization's memory switch. Memory runs in a workspace while this, and the workspace's, are on.
+         */
+        OrganizationMemoryPublic: {
+            /**
+             * Deployment Enabled
+             * @description Whether this deployment offers memory at all.
+             */
+            deployment_enabled: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Organization Id
+             * Format: uuid
+             */
+            organization_id: string;
+        };
+        /** OrganizationMemoryUpdate */
+        OrganizationMemoryUpdate: {
+            /** Enabled */
+            enabled: boolean;
         };
         /**
          * OrganizationModelPricingCreate
@@ -21263,6 +21668,26 @@ export interface components {
             user?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * ReviewedEntryPublic
+         * @description The entry a held proposal would change, as it reads now.
+         */
+        ReviewedEntryPublic: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Text */
+            text: string;
+            /**
+             * Trust
+             * @enum {string}
+             */
+            trust: "reviewed" | "agent" | "external";
+            /** Version */
+            version: number;
         };
         /**
          * RotateMasterKeyRequest
@@ -24509,12 +24934,12 @@ export interface components {
             activation_attempt?: components["schemas"]["ActivationAttemptPublic"] | null;
             /**
              * Dismissed
-             * @description Whether someone skipped the guide for this workspace.
+             * @description Whether the guide was skipped: for the workspace, or for a member who does not manage it, by that member.
              */
             dismissed: boolean;
             /**
              * Experience Eligible
-             * @description Whether the dashboard should offer the guide to this caller right now: the deployment has it enabled, the workspace is classified for it, nobody dismissed it, no request has succeeded yet, and the caller may manage the workspace.
+             * @description Whether the dashboard should offer the guide to this caller right now: the deployment has it enabled, the workspace is classified for it, and the caller may run requests there. For someone who manages the workspace, nobody dismissed it and no request in the workspace has succeeded yet; for a member who does not, they have not dismissed it and no request of their own has succeeded yet.
              */
             experience_eligible: boolean;
             /** @description The setup key the guide already issued, so a reopened guide can offer it instead of rotating it. Null until one is issued, once it is revoked, deleted or expired, when the caller is not the one it was issued to, and whenever the guide is not offered to this caller. */
@@ -24523,7 +24948,7 @@ export interface components {
             latest_attempt?: components["schemas"]["ActivationAttemptPublic"] | null;
             /**
              * Status
-             * @description 'activated' once a gateway request in this workspace has succeeded, 'failed' when the last one failed and none has yet succeeded, 'waiting' when there has been none at all.
+             * @description 'activated' once a gateway request in this workspace has succeeded, 'failed' when the last one failed and none has yet succeeded, 'waiting' when there has been none at all. For a member who does not manage the workspace, only their own requests count.
              * @enum {string}
              */
             status: "waiting" | "failed" | "activated";
@@ -25330,6 +25755,204 @@ export interface components {
             count: number;
             /** Data */
             data: components["schemas"]["WorkspaceMemberPublic"][];
+        };
+        /** WorkspaceMemoryErased */
+        WorkspaceMemoryErased: {
+            /** Entries */
+            entries: number;
+            /** Keys */
+            keys: number;
+            /** Proposals */
+            proposals: number;
+            /** Reads */
+            reads: number;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+        };
+        /**
+         * WorkspaceMemoryPublic
+         * @description A workspace's memory switches, what the deployment allows, and how much the workspace holds.
+         */
+        WorkspaceMemoryPublic: {
+            /**
+             * Auto Recall
+             * @description Search memory for each request's newest user turn and add what is alike enough to it, with no tool call.
+             */
+            auto_recall: boolean;
+            /**
+             * Deployment Enabled
+             * @description Whether this deployment offers memory at all.
+             */
+            deployment_enabled: boolean;
+            /** Deployment Retention Days */
+            deployment_retention_days: number;
+            /**
+             * Enabled
+             * @description Memory on for this workspace: each member's own entries.
+             */
+            enabled: boolean;
+            /**
+             * Entries
+             * @description Entry versions the workspace holds, by status.
+             */
+            entries: {
+                [key: string]: number;
+            };
+            /**
+             * Experiment Ended At
+             * @description When it stopped; null while it runs.
+             */
+            experiment_ended_at: string | null;
+            /**
+             * Experiment Holdout Percent
+             * @description The share of sessions the running savings experiment serves without memory; 0 while none runs.
+             */
+            experiment_holdout_percent: number;
+            /**
+             * Experiment Started At
+             * @description When the last savings experiment began.
+             */
+            experiment_started_at: string | null;
+            /**
+             * Hide External
+             * @description Keep entries resting on outside content out of recall.
+             */
+            hide_external: boolean;
+            /**
+             * Offer To Every Request
+             * @description Offer memory's tools to every request a member sends through the gateway, not only to one that asks for them.
+             */
+            offer_to_every_request: boolean;
+            /**
+             * Organization Enabled
+             * @description Whether the workspace's organization has memory on.
+             */
+            organization_enabled: boolean;
+            /**
+             * Proposals Held
+             * @description Shared proposals waiting for an admin's review.
+             */
+            proposals_held: number;
+            /**
+             * Proposals Waiting
+             * @description Proposals the consolidator has not decided yet, those an admin approved included.
+             */
+            proposals_waiting: number;
+            /**
+             * Recall Max Entries
+             * @description The most entries automatic recall adds to one turn.
+             */
+            recall_max_entries: number;
+            /**
+             * Recall Min Relevance
+             * @description The score an entry must reach where relevance is checked.
+             */
+            recall_min_relevance: number;
+            /**
+             * Recall Min Similarity
+             * @description How alike an entry must be to the turn to be added, 0.3-0.99.
+             */
+            recall_min_similarity: number;
+            /**
+             * Recall Rerank
+             * @description Have the deployment's rerank model score the entries most alike to the turn, and add only those relevant enough; the similarity floor then no longer applies.
+             */
+            recall_rerank: boolean;
+            /**
+             * Recall Rerank Skip Similarity
+             * @description Where relevance is checked: when the most alike entry is at least this alike, 0.3-0.99, hand over by similarity without the rerank model's call. Null checks every turn.
+             */
+            recall_rerank_skip_similarity: number | null;
+            /**
+             * Rerank Available
+             * @description Whether the deployment names a rerank model, without which relevance is not checked.
+             */
+            rerank_available: boolean;
+            /**
+             * Retention Days
+             * @description Days an unused entry is kept; null keeps the deployment's.
+             */
+            retention_days: number | null;
+            /**
+             * Workspace Id
+             * Format: uuid
+             */
+            workspace_id: string;
+            /**
+             * Workspace Scope Enabled
+             * @description The memory every member's agents share.
+             */
+            workspace_scope_enabled: boolean;
+            /**
+             * Write Policy
+             * @description auto keeps what the consolidator decides; review holds every shared proposal for an admin.
+             * @enum {string}
+             */
+            write_policy: "auto" | "review";
+        };
+        /** WorkspaceMemoryUpdate */
+        WorkspaceMemoryUpdate: {
+            /**
+             * Auto Recall
+             * @default false
+             */
+            auto_recall: boolean;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Experiment Holdout Percent
+             * @description Serve this share of sessions without memory to measure what it saves. A new share starts the experiment afresh; 0 stops it and keeps its results.
+             * @default 0
+             */
+            experiment_holdout_percent: number;
+            /**
+             * Hide External
+             * @default false
+             */
+            hide_external: boolean;
+            /**
+             * Offer To Every Request
+             * @default false
+             */
+            offer_to_every_request: boolean;
+            /**
+             * Recall Max Entries
+             * @default 3
+             */
+            recall_max_entries: number;
+            /**
+             * Recall Min Relevance
+             * @default 0.8
+             */
+            recall_min_relevance: number;
+            /**
+             * Recall Min Similarity
+             * @default 0.65
+             */
+            recall_min_similarity: number;
+            /**
+             * Recall Rerank
+             * @default false
+             */
+            recall_rerank: boolean;
+            /** Recall Rerank Skip Similarity */
+            recall_rerank_skip_similarity?: number | null;
+            /** Retention Days */
+            retention_days?: number | null;
+            /**
+             * Workspace Scope Enabled
+             * @default false
+             */
+            workspace_scope_enabled: boolean;
+            /**
+             * Write Policy
+             * @default review
+             * @enum {string}
+             */
+            write_policy: "auto" | "review";
         };
         /**
          * WorkspaceProviderKeyOverridePublic
@@ -27574,6 +28197,8 @@ export interface operations {
                 source?: "all" | "discovered" | "custom";
                 /** @description Only models at least one provider declared to keep no prompt or completion data offers. */
                 zero_data_retention?: boolean;
+                /** @description Only models a hosted provider serves from one of these data locations: ISO 3166-1 alpha-2 country codes, `EU` or `GLOBAL`. Matched as a workspace's `allowed_data_locations` is, so `EU` also matches each EU member state and `GLOBAL` only `GLOBAL`. A model whose location is undeclared matches none. */
+                data_location?: string[];
                 /** @description Release window ending today (UTC); zero disables it. Unknown and future releases do not match. */
                 released_within_days?: number;
                 sort?: "name" | "released" | "input" | "output" | "context" | "providers";
@@ -30916,6 +31541,74 @@ export interface operations {
             };
         };
     };
+    "memory-memory_mcp_stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No stream. */
+            405: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    "memory-memory_mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description A notification, which has no response. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The key names no member of its workspace. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The message exceeds 64 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Only application/json is accepted. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     "messages-create_message": {
         parameters: {
             query?: never;
@@ -33047,6 +33740,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallerOrganizationMembershipsPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-get_organization_memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationMemoryPublic"];
+                };
+            };
+        };
+    };
+    "memory-set_organization_memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OrganizationMemoryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrganizationMemoryPublic"];
                 };
             };
             /** @description Validation Error */
@@ -41178,6 +41924,237 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["WorkspaceMemberPublic"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-get_workspace_memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMemoryPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-set_workspace_memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WorkspaceMemoryUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMemoryPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-erase_workspace_memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceMemoryErased"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-get_memory_experiment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryExperimentPublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-get_memory_review_queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryReviewQueuePublic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    "memory-approve_memory_proposal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The workspace has no shared proposal waiting for review by that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description It carries what memory never keeps, which no approval lets in. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    "memory-discard_memory_proposal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workspace_id: string;
+                proposal_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The workspace has no shared proposal waiting for review by that id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

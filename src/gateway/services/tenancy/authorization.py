@@ -11,11 +11,11 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.core.sql import WorkspaceIds
 from gateway.exceptions.organizations_exceptions import NotAuthorizedError, WorkspaceNotFoundError
 from gateway.models.tenancy import MANAGEMENT_ROLES, Organization, User, Workspace
 from gateway.repositories.tenancy import (
     UserRepository,
-    WorkspaceIds,
     WorkspaceMemberRepository,
     WorkspaceRepository,
     ids_in_organization,
@@ -189,6 +189,29 @@ class WorkspaceAccess:
     async def people(self, user_ids: Collection[uuid.UUID]) -> list[User]:
         """The accounts these ids name."""
         return await UserRepository(self._db).get_by_ids(user_ids)
+
+
+class ManagerChecks:
+    """Whether a caller manages a workspace or their active organization, answered with the organization it is.
+
+    For a domain that keeps a switch per workspace and organization, such as agent memory's.
+    """
+
+    def __init__(self, db: AsyncSession, organizations: OrganizationService) -> None:
+        self._organizations = organizations
+        self._access = WorkspaceAccess(db, organizations)
+
+    async def require_manager(self, user: User, workspace_id: uuid.UUID) -> uuid.UUID:
+        """The workspace's organization, unless ``user`` does not manage it; one they cannot see reads as missing."""
+        workspace = await self._access.resolve_visible_workspace(user=user, workspace_id=workspace_id)
+        await self._access.require_workspace_management_access(user=user, workspace=workspace)
+        return workspace.organization_id
+
+    async def require_organization_manager(self, user: User) -> uuid.UUID:
+        """The caller's active organization, unless they are not one of its owners or admins."""
+        organization = await self._organizations.get_active_organization_for_user(user)
+        await self._organizations.require_active_organization_management_access(user=user, organization=organization)
+        return organization.id
 
 
 @dataclass(frozen=True)

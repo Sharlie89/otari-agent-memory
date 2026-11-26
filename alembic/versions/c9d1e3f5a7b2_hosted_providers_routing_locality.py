@@ -6,7 +6,7 @@ existing row: nothing has been declared yet, and an undeclared provider is
 never eligible.
 
 Revision ID: c9d1e3f5a7b2
-Revises: f6b8d0a2c4e7
+Revises: 62f1e2f1da02
 Create Date: 2026-11-24
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c9d1e3f5a7b2"
-down_revision: str | Sequence[str] | None = "f6b8d0a2c4e7"
+down_revision: str | Sequence[str] | None = "62f1e2f1da02"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

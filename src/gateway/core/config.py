@@ -6,9 +6,9 @@ import re
 import secrets
 import types
 import typing
-from collections.abc import Callable, Container
+from collections.abc import Callable, Container, Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, Literal, NamedTuple, Self
 from urllib.parse import urlsplit
 
 import yaml
@@ -29,6 +29,7 @@ from gateway.core.settings.health_checks import HealthCheckFeatureSettings
 from gateway.core.settings.identity import IdentitySettings
 from gateway.core.settings.inference import InferenceSettings
 from gateway.core.settings.mcp_catalog import McpCatalogSettings
+from gateway.core.settings.memory import MemorySettings
 from gateway.core.settings.organizations import OrganizationSettings
 from gateway.core.settings.pricing import PricingSettings
 from gateway.core.settings.providers import ProviderSettings
@@ -112,6 +113,9 @@ END_USER_BUDGET_HEADER = "Otari-End-User-Budget"
 # for clients that can add a header but not a body field (Claude Code's
 # ANTHROPIC_CUSTOM_HEADERS). See ``api/routes/_request_tags.py``.
 TAGS_HEADER = "Otari-Tags"
+# Request header a request routed through the gateway sends as ``on`` to ask for
+# memory's tools, or ``off`` to decline a workspace's offer. See docs/memory.md.
+MEMORY_HEADER = "Otari-Memory"
 # The version this deployment's API is served under. The root is built from it
 # rather than parsed back out of it, so nothing has to guess where the version
 # segment sits in a path.
@@ -675,6 +679,7 @@ class GatewayConfig(
     HealthCheckFeatureSettings,
     McpCatalogSettings,
     IdentitySettings,
+    MemorySettings,
     OrganizationSettings,
     ToolSettings,
     TraceSettings,
@@ -1234,9 +1239,13 @@ class GatewayConfig(
             "from the deployment list and the defaults, and nothing tenant-specific. Off by default."
         ),
     )
-    files_enabled: Annotated[bool, Shown(SettingsGroup.FILES)] = Field(
+    files_api_enabled: Annotated[bool, Shown(SettingsGroup.FILES)] = Field(
         default=True,
-        description="Enable the /api/v1/files upload/storage endpoints.",
+        description=(
+            "Serve the /api/v1/files upload and storage endpoints. This gates the API only: with it off, "
+            "the file sweep still reclaims expired and deleted files, which only files_sweep_interval_sec: 0 "
+            "stops. Formerly files_enabled, which is still read as a deprecated name."
+        ),
     )
     files_backend: Annotated[str, Shown(SettingsGroup.FILES)] = Field(
         default="local",
@@ -1931,12 +1940,6 @@ class GatewayConfig(
         for name, target in self.aliases.items():
             self.validate_alias(name, target)
 
-    def policy_names(self) -> set[str]:
-        """Every configured routing-policy name. Empty when routing is disabled."""
-        if not self.routing.enabled:
-            return set()
-        return set(self.routing.policies)
-
     def validate_routing_policies(self) -> None:
         """Validate the ``routing:`` block at startup so misconfig fails fast.
 
@@ -2301,6 +2304,22 @@ class GatewayConfig(
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="before")
+    @classmethod
+    def _read_old_setting_names(cls, data: Any) -> Any:
+        """Read a renamed setting's old name when the config is built directly rather than by ``load_config``."""
+        if isinstance(data, dict):
+            data = dict(data)
+            _read_old_names(data, read_env=True)
+        return data
+
+    def model_copy(self, *, update: Mapping[str, Any] | None = None, deep: bool = False) -> Self:
+        """Copy the config, reading a renamed setting's old name in ``update``, which pydantic does not validate."""
+        if update:
+            update = dict(update)
+            _read_old_names(update, read_env=False)
+        return super().model_copy(update=update, deep=deep)
+
     @field_validator("master_key")
     @classmethod
     def _blank_master_key_is_unset(cls, value: str | None) -> str | None:
@@ -2656,10 +2675,14 @@ def load_config(config_path: str | None = None) -> GatewayConfig:
             if yaml_config:
                 config_dict = _resolve_env_vars(yaml_config)
 
+    renamed_keys = _rename_old_keys(config_dict)
     structured_env_config = _load_structured_env_config()
     if structured_env_config:
+        # Within each source before they merge, so the environment's old name still beats the file's new one.
+        renamed_keys += _rename_old_keys(structured_env_config)
         config_dict.update(structured_env_config)
     _apply_json_env_overrides(config_dict)
+    _apply_renamed_settings(config_dict, renamed_keys)
     _warn_about_unknown_keys(config_dict)
     _warn_about_retired_mcp_settings(config_dict)
 
@@ -2708,6 +2731,64 @@ def _warn_about_retired_mcp_settings(config: dict[str, Any]) -> None:
             "single-tenant or trusted deployment.",
             ", ".join(found),
         )
+
+
+# Settings renamed in place, old name to new. The old name still configures the
+# setting, in the config file or as its OTARI_ variable, and saying which one a
+# deployment used is how it learns the new name before the old one goes.
+_RENAMED_SETTINGS = (("files_enabled", "files_api_enabled"),)
+
+
+def _rename_old_keys(source: dict[str, Any]) -> list[str]:
+    """Move each old key in one config source onto its new name, where that source does not set the new one too."""
+    found: list[str] = []
+    for old, new in _RENAMED_SETTINGS:
+        if old in source:
+            found.append(old)
+            source.setdefault(new, source.pop(old))
+    return found
+
+
+def _apply_renamed_settings(config: dict[str, Any], renamed_keys: list[str]) -> None:
+    """Read each old OTARI_ variable into its new name, and name every old spelling still in use.
+
+    ``renamed_keys`` are the old keys ``_rename_old_keys`` already moved out of the
+    config file and the structured environment.
+    """
+    for old, new in _RENAMED_SETTINGS:
+        used = [old] if old in renamed_keys else []
+        old_env = f"{OTARI_ENV_PREFIX}{old.upper()}"
+        raw = os.getenv(old_env)
+        if raw:
+            used.append(old_env)
+            # The new variable overrides it, so the old value is only parsed without one.
+            if not os.getenv(f"{OTARI_ENV_PREFIX}{new.upper()}"):
+                config[new] = _coerce_scalar_env(raw, GatewayConfig.model_fields[new].annotation)
+        if used:
+            _warn_about_old_name(" and ".join(used), new)
+
+
+def _read_old_names(data: dict[str, Any], *, read_env: bool) -> None:
+    """Move each old name in input given to ``GatewayConfig`` itself onto its new one.
+
+    ``load_config`` has already done this for its own input, so there it finds
+    nothing. With ``read_env``, an old ``OTARI_`` variable is read where the input
+    does not set the new name, which pydantic's own environment source would have.
+    """
+    for old, new in _RENAMED_SETTINGS:
+        old_env = f"{OTARI_ENV_PREFIX}{old.upper()}"
+        if old in data:
+            data.setdefault(new, data.pop(old))
+            _warn_about_old_name(old, new)
+        elif read_env and new not in data and (raw := os.getenv(old_env)):
+            data[new] = raw
+            _warn_about_old_name(old_env, new)
+
+
+def _warn_about_old_name(used: str, new: str) -> None:
+    logger.warning(
+        "%s is a deprecated name for %s (%s%s); set the new name instead.", used, new, OTARI_ENV_PREFIX, new.upper()
+    )
 
 
 def _warn_about_unknown_keys(config: dict[str, Any]) -> None:

@@ -11,6 +11,7 @@ ring listed here makes every module in it unimportable. The offered-models
 service is in `services/providers/` for that reason among others.
 """
 
+from gateway.services.tenancy.authorization import ManagerChecks, WorkspaceAccess
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService
 from gateway.services.tenancy.organization_domain_service import (
     DomainAutoJoinListener,
@@ -39,10 +40,12 @@ from gateway.services.tenancy.workspace_service import WorkspaceService
 __all__ = [
     "DomainAutoJoinListener",
     "InvitationClaimSettings",
+    "ManagerChecks",
     "OrgProviderKeyService",
     "OrganizationDomainService",
     "OrganizationService",
     "VerifiedDomainLookup",
+    "WorkspaceAccess",
     "WorkspaceService",
     "describe_caller",
     "ensure_bootstrap_identity",

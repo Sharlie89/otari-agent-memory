@@ -7,11 +7,19 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, Never, cast
 
-from sqlalchemy import ColumnElement, Select, and_, case, false, func, null, or_, select, tuple_, update
+from sqlalchemy import ColumnElement, and_, case, func, null, or_, select, tuple_, update
 from sqlalchemy.engine import RowMapping
 
 from gateway.core.metered_pricing import ChargeLine
-from gateway.core.sql import bucket_expr, canonical_bucket, dialect_name, match_any, utc_bound
+from gateway.core.sql import (
+    WorkspaceIds,
+    bucket_expr,
+    canonical_bucket,
+    dialect_name,
+    in_workspaces,
+    match_any,
+    utc_bound,
+)
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import MIN_THROUGHPUT_TOKENS
 from gateway.models.usage import SERVED_HERE_SLUG, UsageLog
@@ -31,6 +39,28 @@ from gateway.schemas.usage_and_telemetry import (
 # The statuses that end a request. ``absorbed`` is an attempt a later one recovered
 # from, so counting it would count one request twice.
 _REQUEST_STATUSES = ("success", "error", "incomplete")
+
+
+@dataclass(frozen=True)
+class SessionTotals:
+    """What one session's requests used. ``cost`` is None where some request of it has no cost."""
+
+    session: str
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
+    cost: Decimal | None
+
+
+@dataclass(frozen=True)
+class EndpointTotals:
+    """The calls to one endpoint, and the tokens they used."""
+
+    endpoint: str
+    calls: int
+    input_tokens: int
+    output_tokens: int
 
 
 def new_usage_row(
@@ -167,7 +197,7 @@ class UsageScope:
     narrows the scope to the rows one key wrote.
     """
 
-    workspaces: Collection[uuid.UUID] | Select[uuid.UUID] | None
+    workspaces: WorkspaceIds | None
     api_key_id: str | None = None
 
 
@@ -244,18 +274,9 @@ _GROUP_COLUMNS: dict[str, Any] = {
 
 def _scope_conditions(scope: UsageScope) -> list[ColumnElement[bool]]:
     conditions: list[ColumnElement[bool]] = []
-    workspaces = scope.workspaces
-    if isinstance(workspaces, Select):
-        conditions.append(UsageLog.workspace_id.in_(workspaces))
-    elif workspaces is not None:
-        ids = sorted(workspaces)
-        if not ids:
-            # Belongs to no workspace yet: nothing was refused, there is simply nothing here.
-            conditions.append(false())
-        elif len(ids) == 1:
-            conditions.append(UsageLog.workspace_id == ids[0])
-        else:
-            conditions.append(UsageLog.workspace_id.in_(ids))
+    if scope.workspaces is not None:
+        # An empty set is a caller in no workspace yet: nothing was refused, there is simply nothing here.
+        conditions.append(in_workspaces(UsageLog.workspace_id, scope.workspaces))
     if scope.api_key_id is not None:
         conditions.append(UsageLog.api_key_id == scope.api_key_id)
     return conditions
@@ -532,6 +553,120 @@ class UsageLogRepository(BaseRepository[UsageLog, Never, Never]):
         """Stage ``row`` in the open block, so it commits with the step that settled it."""
         self.db.add(row)
         await self.db.flush()
+
+    async def record_side_call(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        api_key_id: str | None,
+        model: str,
+        provider: str | None,
+        endpoint: str,
+        succeeded: bool,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        latency_ms: int,
+    ) -> None:
+        """Stage one model call the gateway made on its own account, outside any request's budget.
+
+        Recorded so a workspace sees what the calls made on its behalf cost in tokens, with no
+        cost of its own: pricing it, and holding it against a budget, is the deployment's choice.
+        """
+        total = (
+            None
+            if prompt_tokens is None and completion_tokens is None
+            else (prompt_tokens or 0) + (completion_tokens or 0)
+        )
+        self.db.add(
+            UsageLog(
+                id=str(uuid.uuid4()),
+                workspace_id=workspace_id,
+                api_key_id=api_key_id,
+                timestamp=datetime.now(UTC),
+                model=model,
+                provider=provider,
+                endpoint=endpoint,
+                counts_toward_budget=False,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total,
+                status="success" if succeeded else "error",
+                latency_ms=latency_ms,
+            )
+        )
+        await self.db.flush()
+
+    async def session_totals(
+        self, workspace_id: uuid.UUID, *, since: datetime, until: datetime, excluding_endpoints: str
+    ) -> list[SessionTotals]:
+        """What each session's requests served here in the window used, by the session's trace id.
+
+        Requests that name no session are left out, as are rows whose endpoint starts with
+        ``excluding_endpoints``. Input counts cached tokens once, whichever convention the row was recorded under.
+        """
+        cached = func.coalesce(UsageLog.cache_read_tokens, 0) + func.coalesce(UsageLog.cache_write_tokens, 0)
+        input_tokens = func.coalesce(UsageLog.prompt_tokens, 0) + case(
+            (UsageLog.cache_tokens_in_prompt.is_(False), cached), else_=0
+        )
+        result = await self.db.execute(
+            select(
+                UsageLog.source_label,
+                func.count(),
+                func.sum(input_tokens),
+                func.sum(func.coalesce(UsageLog.completion_tokens, 0)),
+                func.sum(func.coalesce(UsageLog.cache_read_tokens, 0)),
+                func.sum(UsageLog.cost),
+                func.count(UsageLog.cost),
+            )
+            .where(
+                UsageLog.workspace_id == workspace_id,
+                UsageLog.source == SERVED_HERE_SLUG,
+                UsageLog.source_label.is_not(None),
+                UsageLog.status.in_(_REQUEST_STATUSES),
+                UsageLog.timestamp >= since,
+                UsageLog.timestamp < until,
+                ~UsageLog.endpoint.startswith(excluding_endpoints),
+            )
+            .group_by(UsageLog.source_label)
+        )
+        return [
+            SessionTotals(
+                session=str(label),
+                requests=int(count),
+                input_tokens=int(inputs or 0),
+                output_tokens=int(outputs or 0),
+                cache_read_tokens=int(cache_reads or 0),
+                # Unknown where any of its rows has no cost, as for a model with no price.
+                cost=Decimal(cost) if cost is not None and priced == count else None,
+            )
+            for label, count, inputs, outputs, cache_reads, cost, priced in result.all()
+        ]
+
+    async def endpoint_totals(
+        self, workspace_id: uuid.UUID, *, since: datetime, until: datetime, endpoints: str
+    ) -> list[EndpointTotals]:
+        """The calls in the window whose endpoint starts with ``endpoints``, by endpoint."""
+        result = await self.db.execute(
+            select(
+                UsageLog.endpoint,
+                func.count(),
+                func.sum(func.coalesce(UsageLog.prompt_tokens, 0)),
+                func.sum(func.coalesce(UsageLog.completion_tokens, 0)),
+            )
+            .where(
+                UsageLog.workspace_id == workspace_id,
+                UsageLog.timestamp >= since,
+                UsageLog.timestamp < until,
+                UsageLog.endpoint.startswith(endpoints),
+            )
+            .group_by(UsageLog.endpoint)
+        )
+        return [
+            EndpointTotals(
+                endpoint=endpoint, calls=int(count), input_tokens=int(inputs or 0), output_tokens=int(outputs or 0)
+            )
+            for endpoint, count, inputs, outputs in result.all()
+        ]
 
     async def reassign_owner(self, user_ids: Collection[str], to_user_id: str) -> None:
         """Stage moving these users' rows onto ``to_user_id``, without the fields that could name a person.

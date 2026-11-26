@@ -1,5 +1,6 @@
 """How a request reaches the organizations domain: organizations, workspaces, members and invitations."""
 
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import Depends
@@ -39,6 +40,7 @@ from gateway.services.organizations import (
     InvitationDelivery,
     InvitationFactsReader,
     InvitationMailLimit,
+    InvitationPolicy,
     MembershipListener,
     MembershipListeners,
     OrganizationClaimedDomains,
@@ -48,8 +50,8 @@ from gateway.services.tenancy import (
     InvitationClaimSettings,
     OrganizationDomainService,
     OrganizationService,
+    WorkspaceAccess,
 )
-from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.workspace_activation_service import WorkspaceActivationService
 from gateway.services.tenancy.workspace_service import WorkspaceService
 from gateway.services.tools import McpGrantMembershipListener
@@ -136,6 +138,17 @@ def get_invitation_mail_limit(
 
 
 InvitationMailLimitDep = Annotated[InvitationMailLimit, Depends(get_invitation_mail_limit)]
+
+
+def invitation_policy_of(config: GatewayConfig) -> InvitationPolicy:
+    """The frozen limits an invitation service is held to on this deployment."""
+    return InvitationPolicy(
+        expires_after=timedelta(hours=config.invitation_expiry_hours),
+        per_address_per_day=config.invitation_per_address_per_day,
+        per_day=config.invitation_per_day,
+        resend_limit=config.invitation_resend_limit,
+        resend_wait=timedelta(minutes=config.invitation_resend_wait_minutes),
+    )
 
 
 def build_invitation_delivery(uow: UnitOfWork, config: GatewayConfig) -> InvitationDelivery:

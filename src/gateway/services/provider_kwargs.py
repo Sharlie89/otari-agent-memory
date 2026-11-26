@@ -79,6 +79,7 @@ _INSTANCE_META_KEYS = (
     "max_retries",
     "messages_api",
     "request_fields",
+    "routing_locality",
     ENDPOINT_AUTH_HEADERS_KEY,
 )
 

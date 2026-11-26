@@ -14,7 +14,7 @@ version = "0.0.0"
 description = "otari, an OpenAI-compatible AI gateway"
 requires-python = ">=3.13"
 dependencies = [
-    "any-llm-sdk[all]>=1.53.1",
+    "any-llm-sdk[all]>=1.55.0",
     # The web search and web fetch libraries, workspace members at any-search/
     # and any-fetch/. Each may not import the gateway back.
     "any-fetch",
@@ -106,6 +106,9 @@ dependencies = [
     # process rather than through a binary such as ffmpeg.
     "tinytag>=2.3.2",
     "webauthn>=2.5.0",
+    # Agent memory's recall ranks a workspace's embeddings as one matrix product,
+    # off the event loop, rather than one Python loop per entry.
+    "numpy>=2.5.4",
 ]
 
 [project.optional-dependencies]
