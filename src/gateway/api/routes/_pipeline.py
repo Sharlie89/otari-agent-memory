@@ -295,7 +295,7 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.mcp_stateless import failure_class
-from gateway.services.memory import MEMORY_TOOL_NAMES, MemoryToolBackend
+from gateway.services.memory import MemoryToolBackend
 from gateway.services.model_access import (
     McpAccess,
     key_model_refusal,
@@ -3482,7 +3482,7 @@ class ToolContext:
         self.candidate_variants: dict[tuple[str | None, str | None], CandidateVariant] = {}
         # The built-in tool names no MCP server may expose: those any attempt of the request runs here.
         self.reserved_tool_names: frozenset[str] = frozenset(self.declared_gateway_tools) | (
-            MEMORY_TOOL_NAMES if memory is not None else frozenset()
+            MemoryToolBackend.tool_names if memory is not None else frozenset()
         )
 
     def for_candidate(self, provider: str | None, model: str | None) -> ToolContext:

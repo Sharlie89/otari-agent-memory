@@ -1,6 +1,6 @@
 """Memory's six tools: what each is called and takes, and how a call runs. One definition for both ways in.
 
-The MCP endpoint and the gateway's own tool loop both call :func:`call_memory_tool`,
+The MCP endpoint and the gateway's own tool loop both run :class:`MemoryTools`,
 so an agent gets the same tools, the same checks and the same answers whether it
 reaches memory as an MCP server or as tools Otari runs on its behalf.
 """
@@ -8,7 +8,7 @@ reaches memory as an MCP server or as tools Otari runs on its behalf.
 import json
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, ClassVar, Final
 
 from pydantic import BaseModel, ValidationError
 
@@ -26,9 +26,6 @@ from gateway.schemas.memory import (
 )
 from gateway.services.memory._service import MemoryCaller, MemoryService
 from gateway.services.memory._store import OpenedEntry
-
-# What a request routed through the gateway sends to ask for memory's tools, or to decline a workspace's offer.
-MEMORY_HEADER: Final = "Otari-Memory"
 
 INSTRUCTIONS: Final = (
     "Shared memory for this workspace's agents, whatever model they run on. Search it before you start work "
@@ -221,45 +218,56 @@ _HANDLERS: Final[dict[str, _Handler]] = {
 }
 
 
-async def call_memory_tool(
-    service: MemoryService, caller: MemoryCaller, name: str, arguments: object
-) -> ToolOutcome | None:
-    """Run one call; None when ``name`` is none of memory's tools.
+class MemoryTools:
+    """Memory's tools over one service, as the MCP endpoint and the gateway's tool loop both run them."""
 
-    A refusal, or arguments that do not validate, come back as an outcome with an
-    error, never raised: the agent is told what to change. The message names the
-    fields that were wrong, never the values it sent.
-    """
-    handler = _HANDLERS.get(name)
-    if handler is None:
-        return None
-    if arguments is None:
-        arguments = {}
-    if not isinstance(arguments, dict):
-        return ToolOutcome(error="Arguments must be an object.")
-    try:
-        result = await handler(service, caller, arguments)
-    except ValidationError as exc:
-        problems = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
-        )
-        return ToolOutcome(error=f"Invalid arguments: {problems}")
-    except TenancyError as exc:
-        return ToolOutcome(error=exc.message)
-    if isinstance(result, list):
-        return ToolOutcome(data={"results": [item.model_dump(mode="json") for item in result]})
-    return ToolOutcome(data=result.model_dump(mode="json"))
+    instructions: ClassVar[str] = INSTRUCTIONS
 
+    def __init__(self, service: MemoryService) -> None:
+        self._service = service
 
-async def recall_for_turn(
-    service: MemoryService, caller: MemoryCaller, query: str, context: str | None = None
-) -> tuple[str | None, int]:
-    """What automatic recall adds to a request's newest turn, and how many entries it holds.
+    @staticmethod
+    def mcp_definitions() -> list[dict[str, Any]]:
+        """The tools as MCP's ``tools/list`` describes them."""
+        return mcp_tool_definitions()
 
-    ``context`` is the user's turns before it, which the turn may only refer to.
+    async def call(self, caller: MemoryCaller, name: str, arguments: object) -> ToolOutcome | None:
+        """Run one call; None when ``name`` is none of memory's tools.
 
-    Raises:
-        TenancyError: memory is off for the caller, or the query could not be embedded.
-    """
-    found = await service.recall(caller, query, context=context)
-    return render_recall([_recalled(recalled.entry, round(recalled.relevance, 4)) for recalled in found]), len(found)
+        A refusal, or arguments that do not validate, come back as an outcome with an
+        error, never raised: the agent is told what to change. The message names the
+        fields that were wrong, never the values it sent.
+        """
+        handler = _HANDLERS.get(name)
+        if handler is None:
+            return None
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return ToolOutcome(error="Arguments must be an object.")
+        try:
+            result = await handler(self._service, caller, arguments)
+        except ValidationError as exc:
+            problems = "; ".join(
+                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
+            )
+            return ToolOutcome(error=f"Invalid arguments: {problems}")
+        except TenancyError as exc:
+            return ToolOutcome(error=exc.message)
+        if isinstance(result, list):
+            return ToolOutcome(data={"results": [item.model_dump(mode="json") for item in result]})
+        return ToolOutcome(data=result.model_dump(mode="json"))
+
+    async def recall_for_turn(
+        self, caller: MemoryCaller, query: str, context: str | None = None
+    ) -> tuple[str | None, int]:
+        """What automatic recall adds to a request's newest turn, and how many entries it holds.
+
+        ``context`` is the user's turns before it, which the turn may only refer to.
+
+        Raises:
+            TenancyError: memory is off for the caller, or the query could not be embedded.
+        """
+        found = await self._service.recall(caller, query, context=context)
+        rendered = render_recall([_recalled(recalled.entry, round(recalled.relevance, 4)) for recalled in found])
+        return rendered, len(found)

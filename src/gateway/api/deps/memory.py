@@ -33,7 +33,6 @@ from gateway.repositories.tenancy import OrganizationMemberRepository, Workspace
 from gateway.repositories.usage_and_telemetry import UsageLogRepository
 from gateway.services.guardrails import GuardrailsNotReachableError, deployment_guardrails_url
 from gateway.services.memory import (
-    MEMORY_ENDPOINT_PREFIX,
     ExperimentArm,
     GuardrailOutcome,
     GuardrailsUnavailableError,
@@ -42,13 +41,12 @@ from gateway.services.memory import (
     MemoryModels,
     MemoryService,
     MemoryToolBackend,
+    MemoryTools,
     ModelUse,
     RecallVectors,
     SessionUsage,
     ToolOutcome,
     WorkspaceKeys,
-    call_memory_tool,
-    recall_for_turn,
 )
 from gateway.services.secret_box import SecretBoxUnavailableError, SecretDecryptionError
 from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
@@ -108,7 +106,7 @@ class _MemoryLedger:
     async def sessions(self, workspace_id: uuid.UUID, since: datetime, until: datetime) -> dict[str, SessionUsage]:
         async with self._uow:
             totals = await self._usage.session_totals(
-                workspace_id, since=since, until=until, excluding_endpoints=MEMORY_ENDPOINT_PREFIX
+                workspace_id, since=since, until=until, excluding_endpoints=MemoryModels.ENDPOINT_PREFIX
             )
         return {
             row.session: SessionUsage(
@@ -126,7 +124,7 @@ class _MemoryLedger:
     ) -> dict[str, MemoryCallUsage]:
         async with self._uow:
             totals = await self._usage.endpoint_totals(
-                workspace_id, since=since, until=until, endpoints=MEMORY_ENDPOINT_PREFIX
+                workspace_id, since=since, until=until, endpoints=MemoryModels.ENDPOINT_PREFIX
             )
         return {row.endpoint: MemoryCallUsage(row.calls, row.input_tokens, row.output_tokens) for row in totals}
 
@@ -437,7 +435,7 @@ class MemoryToolAdmission:
                 recall_vectors=self._recall_vectors,
                 ranking=self._ranking,
             )
-            return await call_memory_tool(service, caller, name, arguments)
+            return await MemoryTools(service).call(caller, name, arguments)
 
     async def _recall(self, caller: MemoryCaller, query: str, context: str | None) -> tuple[str | None, int]:
         # Best effort: a request is served without what memory holds rather than failed or held up for it.
@@ -451,7 +449,7 @@ class MemoryToolAdmission:
                     recall_vectors=self._recall_vectors,
                     ranking=self._ranking,
                 )
-                return await recall_for_turn(service, caller, query, context)
+                return await MemoryTools(service).recall_for_turn(caller, query, context)
         except TimeoutError:
             logger.warning("Automatic recall took longer than %ss; the request goes without it", MEMORY_RECALL_BUDGET_S)
         except TenancyError as exc:

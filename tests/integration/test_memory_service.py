@@ -41,9 +41,9 @@ from gateway.services.memory import (
     GuardrailOutcome,
     GuardrailsUnavailableError,
     MemoryCaller,
+    MemoryConsolidator,
     MemoryService,
     WorkspaceKeys,
-    consolidate_once,
 )
 from gateway.services.memory._models import Decision, MemoryModelError, ModelUse
 from gateway.services.secret_box import generate_secret_key
@@ -556,7 +556,7 @@ async def test_one_pass_consolidates_every_workspace_with_memory_on(memory: Memo
     await memory().propose(tenants.alice, text=DEPLOY, kind="procedure", scope="workspace", external=False)
     await memory().propose(elsewhere, text=DEPLOY, kind="procedure", scope="workspace", external=False)
 
-    assert await consolidate_once(lambda uow: memory()) == 2
+    assert await MemoryConsolidator(lambda uow: memory()).consolidate_once() == 2
 
 
 async def test_every_model_call_is_recorded_as_usage_of_its_workspace(memory: Memory, tenants: Tenants) -> None:

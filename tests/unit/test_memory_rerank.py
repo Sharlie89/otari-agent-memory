@@ -24,7 +24,7 @@ def _models(**config: Any) -> MemoryModels:
     async def resolve(model: str) -> SimpleNamespace:
         return SimpleNamespace(model="rerank-v3.5", provider="cohere", kwargs={"api_key": "k"})
 
-    models._resolve = resolve  # type: ignore[method-assign]
+    models._resolve = resolve  # type: ignore[method-assign, assignment]
     return models
 
 

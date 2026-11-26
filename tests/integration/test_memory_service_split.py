@@ -71,7 +71,11 @@ def test_the_memory_service_answers_only_its_gateways(
     split_client: TestClient, engine_app: FastAPI, master_key_header: dict[str, str]
 ) -> None:
     del split_client  # Booted for the database the two share.
-    body = {"workspace_id": "6f1c1c1e-0000-4000-8000-000000000000", "candidates": [], "queries": [[1.0]]}
+    body: dict[str, object] = {
+        "workspace_id": "6f1c1c1e-0000-4000-8000-000000000000",
+        "candidates": [],
+        "queries": [[1.0]],
+    }
     body |= {"order": "similarity", "keep_top": 3}
     engine = TestClient(engine_app)
 

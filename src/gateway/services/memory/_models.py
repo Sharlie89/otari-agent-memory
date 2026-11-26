@@ -21,13 +21,17 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from time import monotonic
 from types import SimpleNamespace
-from typing import Any, Final, Literal, cast, get_args
+from typing import Any, ClassVar, Final, Literal, cast, get_args
+
+from any_llm import AnyLLM, LLMProvider
+from any_llm.types.completion import CreateEmbeddingResponse
+from any_llm.types.rerank import RerankResponse
 
 from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.ports.model_provider_port import ModelProviderPort
 from gateway.services.provider_kwargs import ResolvedProvider, require_declared_credential, resolve_provider_selector
-from gateway.services.providers import acompletion, aembedding, arerank, serve_on_hosted_provider
+from gateway.services.providers import acompletion, provider_for, serve_on_hosted_provider
 
 DecisionAction = Literal["add", "update", "no_change", "conflict"]
 DECISION_ACTIONS = get_args(DecisionAction)
@@ -102,6 +106,9 @@ class MemoryModels:
 
     ``hosted`` is the deployment's hosted providers; None reaches ``config.yml``'s providers alone.
     """
+
+    # What the endpoint of every call these make is metered under starts with.
+    ENDPOINT_PREFIX: ClassVar[str] = MEMORY_ENDPOINT_PREFIX
 
     def __init__(self, config: GatewayConfig, hosted: ModelProviderPort | None = None) -> None:
         self._config = config
@@ -233,6 +240,37 @@ class MemoryModels:
                 return served
         require_declared_credential(self._config, resolved.instance, resolved.provider, resolved.kwargs)
         return resolved
+
+
+async def aembedding(
+    model: str,
+    inputs: list[str],
+    *,
+    provider: str | LLMProvider,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    client_args: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> CreateEmbeddingResponse:
+    """``any_llm.aembedding`` on the provider client the providers domain reuses across calls."""
+    llm = provider_for(AnyLLM.resolve_provider_key(provider), api_key, api_base, client_args)
+    return await llm.aembedding(model=model, inputs=inputs, **kwargs)
+
+
+async def arerank(
+    model: str,
+    query: str,
+    documents: list[str],
+    *,
+    provider: str | LLMProvider,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    client_args: dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> RerankResponse:
+    """``any_llm.arerank`` on the provider client the providers domain reuses across calls."""
+    llm = provider_for(AnyLLM.resolve_provider_key(provider), api_key, api_base, client_args)
+    return await llm.arerank(model, query, documents, **kwargs)
 
 
 def _use(

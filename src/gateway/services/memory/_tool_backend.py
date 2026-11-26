@@ -7,7 +7,7 @@ request's API key names, fixed when the backend is built; no argument changes it
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Self
+from typing import Any, ClassVar, Self
 
 from gateway.services.memory._service import MemoryCaller
 from gateway.services.memory._tools import (
@@ -26,6 +26,9 @@ RunMemoryTool = Callable[[MemoryCaller, str, dict[str, Any]], Awaitable[ToolOutc
 class MemoryToolBackend:
     """Memory's tools for one request's caller."""
 
+    # Every tool this backend runs, whether or not a request is offered them.
+    tool_names: ClassVar[frozenset[str]] = TOOL_NAMES
+
     def __init__(self, caller: MemoryCaller, run: RunMemoryTool) -> None:
         self.caller = caller
         self._run = run
@@ -41,7 +44,7 @@ class MemoryToolBackend:
         return openai_tool_definitions()
 
     def owns_tool(self, name: str) -> bool:
-        return name in TOOL_NAMES
+        return name in self.tool_names
 
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> str:
         """The call's answer as the model reads it: data with a notice that it is data, or a refusal to act on.

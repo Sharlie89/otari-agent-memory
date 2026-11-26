@@ -48,6 +48,7 @@ from gateway.ports.memory_ranking_port import (
 )
 from gateway.repositories.memory import MemoryRepositories
 from gateway.services.memory._experiment import (
+    MIN_SESSIONS,
     ArmSummary,
     Difference,
     ExperimentArm,
@@ -305,6 +306,8 @@ class ExperimentReport:
     recalls: int
     recalls_with_results: int
     searches: int
+    # Sessions each arm needs before its difference is reported.
+    min_sessions: int = MIN_SESSIONS
 
 
 @dataclass(frozen=True)

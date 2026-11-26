@@ -16,7 +16,7 @@ from gateway.models.memory import MemoryOrganizationSettings, MemoryWorkspaceSet
 from gateway.models.tenancy import OrganizationMember, Workspace, WorkspaceMember
 from gateway.models.tenancy import User as TenancyUser
 from gateway.models.usage import UsageLog
-from gateway.services.memory import MemoryModels, ModelUse, consolidate_once
+from gateway.services.memory import MemoryConsolidator, MemoryModels, ModelUse
 from gateway.services.secret_box import generate_secret_key
 
 from .conftest import build_test_client
@@ -123,7 +123,8 @@ def _consolidate(client: TestClient) -> int:
     portal = client.portal
     assert portal is not None
     container = app.state.container
-    return portal.call(consolidate_once, lambda uow: build_memory_service(uow, config, keys, container))
+    consolidator = MemoryConsolidator(lambda uow: build_memory_service(uow, config, keys, container))
+    return portal.call(consolidator.consolidate_once)
 
 
 @pytest.fixture

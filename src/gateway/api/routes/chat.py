@@ -47,7 +47,7 @@ from gateway.api.routes._recall import recall_context, recall_query, with_recall
 from gateway.api.routes._request_tags import RequestMetadata, RequestTagsHeader, resolved_tags
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
 from gateway.api.routes._tools import _strip_gateway_fields
-from gateway.core.config import GatewayConfig
+from gateway.core.config import MEMORY_HEADER, GatewayConfig
 from gateway.core.error_codes import ErrorKind
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage, cache_write_1h_tokens_of, provider_web_searches_of, reasoning_tokens_of
@@ -79,7 +79,6 @@ from gateway.services.mcp_loop import (
     mcp_tool_loop_stream,
     reports_tool_activity,
 )
-from gateway.services.memory import MEMORY_HEADER
 from gateway.services.pricing import PriceFacts
 from gateway.services.provider_kwargs import apply_endpoint_defaults, with_request_fields
 from gateway.services.providers import acompletion

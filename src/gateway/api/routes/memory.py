@@ -58,19 +58,16 @@ from gateway.schemas.memory import (
     WorkspaceMemoryUpdate,
 )
 from gateway.services.memory import (
-    EXPERIMENT_MIN_SESSIONS,
-    MEMORY_INSTRUCTIONS,
     ArmSummary,
     Difference,
     HeldProposal,
     MemoryCaller,
+    MemoryConsolidator,
     MemoryService,
+    MemoryTools,
     SwitchChange,
     ToolOutcome,
     WorkspaceMemory,
-    call_memory_tool,
-    mcp_tool_definitions,
-    run_consolidator,
 )
 from gateway.types.key_scope import KeyScope
 from gateway.version import __version__
@@ -106,7 +103,7 @@ async def _call_tool(service: MemoryService, caller: MemoryCaller, params: objec
     """The tool's result, or None when the call names no tool this server has."""
     if not isinstance(params, dict) or not isinstance(params.get("name"), str):
         return None
-    outcome = await call_memory_tool(service, caller, params["name"], params.get("arguments"))
+    outcome = await MemoryTools(service).call(caller, params["name"], params.get("arguments"))
     return _tool_result(outcome) if outcome is not None else None
 
 
@@ -145,13 +142,13 @@ async def memory_mcp(request: Request, service: MemoryServiceDep, caller: Memory
                 "protocolVersion": requested if requested in SUPPORTED_PROTOCOL_VERSIONS else LATEST_PROTOCOL_VERSION,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "otari-memory", "version": __version__},
-                "instructions": MEMORY_INSTRUCTIONS,
+                "instructions": MemoryTools.instructions,
             },
         )
     if method == "ping":
         return _rpc_result(message_id, {})
     if method == "tools/list":
-        return _rpc_result(message_id, {"tools": mcp_tool_definitions()})
+        return _rpc_result(message_id, {"tools": MemoryTools.mcp_definitions()})
     if method == "tools/call":
         result = await _call_tool(service, caller, params)
         if result is None:
@@ -271,7 +268,7 @@ async def get_memory_experiment(
         holdout_percent=report.holdout_percent,
         started_at=report.started_at,
         ended_at=report.ended_at,
-        min_sessions=EXPERIMENT_MIN_SESSIONS,
+        min_sessions=report.min_sessions,
         control=_arm_public(report.control),
         memory=_arm_public(report.memory),
         tokens=_difference_public(report.tokens),
@@ -448,7 +445,7 @@ async def _consolidate(config: GatewayConfig) -> None:
     )
     keys = memory_keys_for(config, container.resolve(ContentKeyPort, None))
     try:
-        await run_consolidator(lambda uow: build_memory_service(uow, config, keys, container))
+        await MemoryConsolidator(lambda uow: build_memory_service(uow, config, keys, container)).run()
     finally:
         keys.clear()
 
