@@ -904,6 +904,34 @@ def resolve_catalog_fallback(
     return resolve_catalog_offerings(model_selector, workspace_id=workspace_id)
 
 
+def resolve_policy_fallbacks(
+    config: GatewayConfig,
+    model_selector: str,
+    user_id: str | None = None,
+    *,
+    workspace_id: uuid.UUID | None = None,
+) -> tuple[str, ...]:
+    """The ``on_failure`` targets of the static policy a name resolves to, in order, or an empty tuple.
+
+    Empty wherever :func:`resolve_provider_selector` does not serve the name
+    through a static policy: an alias claims it, no policy does, or the policy
+    is dynamic. Each target is resolved as the catalog spells it, as the
+    policy's default is.
+    """
+    try:
+        target = _claimed_target(config, model_selector, user_id, workspace_id)
+    except _ConstrainedPolicyNeedsPlan:
+        return ()
+    if target is None or resolve_effective_alias(config, model_selector, user_id, workspace_id=workspace_id):
+        return ()
+    spec = resolve_effective_policy(config, model_selector, user_id, workspace_id=workspace_id)
+    if spec is None:
+        return ()
+    return tuple(
+        resolve_catalog_selector(selector, workspace_id=workspace_id) or selector for selector in spec.on_failure
+    )
+
+
 class _ConstrainedPolicyNeedsPlan(ValueError):
     """The selector can be served only through a request-aware policy plan."""
 

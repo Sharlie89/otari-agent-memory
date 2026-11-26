@@ -454,10 +454,12 @@ scoping parameters.
 
 ## Routing-policy model names
 
-A static one-target policy resolves anywhere an alias does. A conditional,
-weighted, or priority policy applies only to Chat Completions, Messages, and
-Responses because other endpoints do not provide the request context needed to
-choose a candidate.
+A static policy resolves anywhere an alias does, to its `default`. Image
+generation and image edits also try its `on_failure` targets when the default's
+provider fails; embeddings and audio do not (see
+[Routing](routing.md#rules-and-limits)). A conditional, weighted, or priority policy
+applies only to Chat Completions, Messages, and Responses because other
+endpoints do not provide the request context needed to choose a candidate.
 
 Policies appear as model names, but dynamic policies have no single price.
 Price their concrete candidates. Unlike aliases, policies do not hide candidate

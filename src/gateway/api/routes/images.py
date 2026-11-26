@@ -136,6 +136,7 @@ async def create_image(
         billing=billing,
         relabel=False,
         price_facts=facts,
+        fallback=True,
     )
     return _priced_body(outcome)
 
@@ -343,5 +344,6 @@ async def _run_edit(
         billing=billing,
         relabel=False,
         price_facts=facts,
+        fallback=True,
     )
     return _priced_body(outcome)

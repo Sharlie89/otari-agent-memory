@@ -490,7 +490,16 @@ request schemas.
   configured policies.
 - Caller model allow-lists apply to every candidate.
 - Dynamic policies apply to Chat Completions, Messages, and Responses. A static
-  one-target policy can resolve on other model-taking endpoints.
+  policy can resolve on other model-taking endpoints.
+- Image generation and image edits follow a static policy's `on_failure`: when
+  the provider of one target fails, the next is sent the same request. Each
+  target is reserved for, priced and checked on its own, targets the caller's
+  key may not use are left out, and the response carries the same `Otari-Provider`,
+  `Otari-Model`, `Otari-Attempt-Count`, `Otari-Fallback` and `Otari-Deployment-Paid`
+  headers as a completion.
+- Embeddings and audio serve a static policy's `default` only and never try
+  its `on_failure`: another embedding model answers in a different vector space,
+  so falling over would return a wrong answer rather than an error.
 
 ## What is billed and what the caller sees
 

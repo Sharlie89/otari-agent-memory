@@ -37,11 +37,12 @@ from any_llm.types.completion import (
     Function,
     Usage,
 )
+from any_llm.types.image import Image, ImagesResponse
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from gateway.api.routes._attempts import LOCKED_IN_DETAIL
+from gateway.api.routes._attempts import ALL_ATTEMPTS_FAILED_DETAIL, LOCKED_IN_DETAIL
 from gateway.core.config import (
     API_KEY_HEADER,
     API_ROOT,
@@ -1171,6 +1172,137 @@ def test_a_static_policy_resolves_on_a_non_completion_endpoint(client: TestClien
     assert mock.await_args.kwargs["provider"] == "openai"
     # ...and the caller still sees the name they sent.
     assert resp.json()["model"] == "solo"
+
+
+def _images_response() -> ImagesResponse:
+    return ImagesResponse(created=0, data=[Image(b64_json="aW1hZ2U=")])
+
+
+def _generate_image(client: TestClient, model: str) -> Any:
+    return client.post(
+        f"{API_ROOT}/images/generations",
+        json={"model": model, "prompt": "a red square", "user": "test-user"},
+        headers=HEADERS,
+    )
+
+
+def test_image_generation_falls_over_to_the_policy_on_failure_target(client: TestClient) -> None:
+    """A static policy's ``on_failure`` is a promise on every endpoint that serves it,
+    so an image request tries the next target rather than failing on the default.
+    """
+    _create_user(client)
+    with patch(
+        "gateway.api.routes.images.aimage_generation",
+        new_callable=AsyncMock,
+        side_effect=[_http_error(503), _images_response()],
+    ) as mock:
+        resp = _generate_image(client, "fast")
+
+    assert resp.status_code == 200, resp.text
+    assert [call.kwargs["model"] for call in mock.await_args_list] == ["gpt-5-mini", "claude-haiku-4-5"]
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true", "false")
+    rows = [row for row in _usage_rows(client) if row["endpoint"] == "/v1/images/generations"]
+    by_status = {row["status"]: row for row in rows}
+    assert sorted(by_status) == ["absorbed", "success"]
+    assert by_status["absorbed"]["provider"] == "openai"
+    assert by_status["success"]["provider"] == "anthropic"
+    assert {row["requested_model"] for row in rows} == {"fast"}
+
+
+def test_image_generation_served_by_the_policy_default_says_so(client: TestClient) -> None:
+    _create_user(client)
+    with patch(
+        "gateway.api.routes.images.aimage_generation", new_callable=AsyncMock, return_value=_images_response()
+    ) as mock:
+        resp = _generate_image(client, "fast")
+
+    assert resp.status_code == 200, resp.text
+    assert mock.await_count == 1
+    assert _served_by(resp) == ("openai", "gpt-5-mini", "1", "false", "false")
+
+
+def test_image_generation_fails_once_every_policy_target_has(client: TestClient) -> None:
+    _create_user(client)
+    with patch(
+        "gateway.api.routes.images.aimage_generation",
+        new_callable=AsyncMock,
+        side_effect=[_http_error(503), RuntimeError("down")],
+    ) as mock:
+        resp = _generate_image(client, "fast")
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"] == ALL_ATTEMPTS_FAILED_DETAIL
+    assert mock.await_count == 2
+    rows = [row for row in _usage_rows(client) if row["endpoint"] == "/v1/images/generations"]
+    assert sorted(row["status"] for row in rows) == ["absorbed", "error"]
+
+
+def test_image_generation_does_not_fall_over_once_a_provider_has_answered(client: TestClient) -> None:
+    """A failure settling an image the provider made must not make, and bill for, a second one."""
+    _create_user(client)
+    with (
+        patch(
+            "gateway.api.routes.images.aimage_generation", new_callable=AsyncMock, return_value=_images_response()
+        ) as mock,
+        patch("gateway.api.routes._passthrough.price_usage", side_effect=RuntimeError("settlement failed")),
+    ):
+        resp = _generate_image(client, "fast")
+
+    assert resp.status_code == 502, resp.text
+    assert mock.await_count == 1
+
+
+def test_image_edit_falls_over_with_the_same_upload(client: TestClient) -> None:
+    _create_user(client)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    with patch(
+        "gateway.api.routes.images.aimage_edit",
+        new_callable=AsyncMock,
+        side_effect=[_http_error(503), _images_response()],
+    ) as mock:
+        resp = client.post(
+            f"{API_ROOT}/images/edits",
+            data={"model": "fast", "prompt": "make it green", "user": "test-user"},
+            files={"image": ("cat.png", png, "image/png")},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert [call.kwargs["model"] for call in mock.await_args_list] == ["gpt-5-mini", "claude-haiku-4-5"]
+    assert [call.kwargs["image"] for call in mock.await_args_list] == [("cat.png", png, "image/png")] * 2
+    assert _served_by(resp) == ("anthropic", "claude-haiku-4-5", "2", "true", "false")
+
+
+@pytest.mark.parametrize(
+    ("allowed", "tried", "status_code"),
+    [
+        # The fallback target is dropped, so the default's failure is the answer.
+        (["openai:gpt-5-mini"], ["gpt-5-mini"], 502),
+        # The default is dropped, so the fallback target serves first.
+        (["anthropic:claude-haiku-4-5"], ["claude-haiku-4-5"], 200),
+    ],
+)
+def test_image_generation_never_tries_a_policy_target_the_key_may_not_use(
+    client: TestClient, allowed: list[str], tried: list[str], status_code: int
+) -> None:
+    _create_user(client)
+    key_resp = client.post(
+        f"{API_ROOT}/keys", json={"user_id": "test-user", "allowed_models": allowed}, headers=HEADERS
+    )
+    assert key_resp.status_code == 200, key_resp.text
+    with patch(
+        "gateway.api.routes.images.aimage_generation",
+        new_callable=AsyncMock,
+        side_effect=[_http_error(503) if tried == ["gpt-5-mini"] else _images_response()],
+    ) as mock:
+        resp = client.post(
+            f"{API_ROOT}/images/generations",
+            json={"model": "fast", "prompt": "a red square"},
+            headers={API_KEY_HEADER: f"Bearer {key_resp.json()['key']}"},
+        )
+
+    assert resp.status_code == status_code, resp.text
+    assert [call.kwargs["model"] for call in mock.await_args_list] == tried
 
 
 def test_a_dynamic_policy_is_not_a_model_name_outside_the_completion_routes(client: TestClient) -> None:
