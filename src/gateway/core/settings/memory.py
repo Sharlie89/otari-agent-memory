@@ -1,0 +1,111 @@
+"""Settings for agent memory: whether the deployment offers it, the models it uses, and its limits."""
+
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+from gateway.core.settings_view import OMITTED, SECRET, SettingsGroup, Shown
+
+
+class MemorySettings(BaseModel):
+    memory_enabled: Annotated[bool, Shown(SettingsGroup.TOOLS)] = Field(
+        default=False,
+        description=(
+            "Offer agents a memory each workspace shares: agents propose what they learn, and a consolidator decides "
+            "what is kept. Every entry and its embedding are stored sealed under the deployment's content key "
+            "(trace_content_key_backend), and a workspace keeps nothing until its managers turn memory on. Off by "
+            "default. Requires restart."
+        ),
+    )
+    memory_embedding_model: Annotated[str | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "The model every memory entry and search is embedded with, as provider:model. One model for the whole "
+            "deployment, so every agent searches the same index whatever model it runs on. Changing it re-embeds "
+            "nothing: entries embedded by another model are left out of search."
+        ),
+    )
+    memory_consolidation_model: Annotated[str | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "The model that decides what each proposal does to memory (add, update, merge, no change or conflict), "
+            "as provider:model. It answers with a decision, never with text to store."
+        ),
+    )
+    memory_rerank_model: Annotated[str | None, Shown(SettingsGroup.TOOLS)] = Field(
+        default=None,
+        description=(
+            "The rerank model a workspace's automatic recall may check relevance with, as provider:model: it scores "
+            "the entries most alike to a turn, and only those relevant enough are handed over. Unset, a workspace "
+            "cannot turn the check on."
+        ),
+    )
+    memory_recall_cache: Annotated[bool, OMITTED] = Field(
+        default=True,
+        description=(
+            "Hold the entry embeddings automatic recall opens in each gateway process for up to ten minutes, so a "
+            "turn opens only those it has not opened yet. Embeddings only, never text, and which entries a member "
+            "may recall is read from the database every turn. Off opens every entry on every turn: plaintext lives "
+            "no longer than a request, and erasing a workspace leaves nothing opened in any process."
+        ),
+    )
+    memory_service_url: Annotated[str | None, OMITTED] = Field(
+        default=None,
+        description=(
+            "The memory service this gateway hands recall's ranking and the consolidator to, such as "
+            "http://otari-memory:8011: the same otari, started with `otari memory-service`. The gateway still reads "
+            "which entries a member may recall from the database; the service opens their embeddings, holds them and "
+            "ranks. Unset, the gateway ranks and consolidates in its own process. Requires memory_service_token."
+        ),
+    )
+    memory_service_token: Annotated[str | None, SECRET] = Field(
+        default=None,
+        description=(
+            "The shared secret a gateway sends the memory service and the service requires, on both sides. Any long "
+            "random string; it must differ from the master key."
+        ),
+    )
+    memory_engine: Annotated[bool, OMITTED] = Field(
+        default=False,
+        description=(
+            "This process is the memory service: it ranks for the gateways that set memory_service_url and runs the "
+            "consolidator. `otari memory-service` sets it."
+        ),
+    )
+    memory_max_entries_per_workspace: Annotated[int, OMITTED] = Field(
+        default=5_000,
+        gt=0,
+        description="Active entries one workspace may hold. Search ranks them in memory, so this bounds its cost.",
+    )
+    memory_entry_max_length: Annotated[int, OMITTED] = Field(
+        default=2_000,
+        gt=0,
+        le=16_000,
+        description="Longest text, in characters, one proposal or entry may hold.",
+    )
+    memory_retention_days: Annotated[int, OMITTED] = Field(
+        default=180,
+        gt=0,
+        description="Delete an entry, or a version it replaced, once nobody has used it for this many days.",
+    )
+    memory_proposal_max_age_hours: Annotated[int, OMITTED] = Field(
+        default=24,
+        gt=0,
+        description=(
+            "Delete a proposal not decided within this many hours, including one waiting for an admin, so what an "
+            "agent offered is never held longer than its decision takes."
+        ),
+    )
+    memory_read_retention_days: Annotated[int, OMITTED] = Field(
+        default=365,
+        gt=0,
+        description="Keep the record of who recalled which entries for this many days. It holds no content.",
+    )
+    memory_key_rotation_days: Annotated[int, OMITTED] = Field(
+        default=30,
+        gt=0,
+        description=(
+            "How long one workspace data key seals new entries before a new one is made. Keys already made keep "
+            "opening what they sealed."
+        ),
+    )

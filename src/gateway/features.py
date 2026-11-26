@@ -11,6 +11,7 @@ from gateway.api.routes.feedback import FEATURE as FEEDBACK
 from gateway.api.routes.health_checks import FEATURE as HEALTH_CHECKS
 from gateway.api.routes.identity_apps import FEATURE as OAUTH_APPS
 from gateway.api.routes.mcp_catalog import FEATURE as MCP_CATALOG
+from gateway.api.routes.memory import FEATURE as MEMORY
 from gateway.api.routes.oauth import FEATURE as WORKLOAD_IDENTITY_EXCHANGE
 from gateway.api.routes.organization_sso import FEATURE as ORGANIZATION_SSO
 from gateway.api.routes.platform_connect import FEATURE as PLATFORM_CONNECT
@@ -23,6 +24,7 @@ CORE_FEATURES: tuple[CoreFeature, ...] = (
     OAUTH_APPS,
     FEEDBACK,
     HEALTH_CHECKS,
+    MEMORY,
     MCP_CATALOG,
     ORGANIZATION_SSO,
     PLATFORM_CONNECT,

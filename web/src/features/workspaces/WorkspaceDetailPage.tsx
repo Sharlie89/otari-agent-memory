@@ -6,6 +6,7 @@ import { ErrorBanner } from "@/design-system/feedback/ErrorBanner"
 import { PageLoading } from "@/design-system/feedback/PageLoading"
 import { PageIntro } from "@/design-system/layout/PageIntro"
 import { Tab, TabRow } from "@/design-system/navigation/TabRow"
+import { WorkspaceMemorySection } from "@/features/memory/WorkspaceMemorySection"
 import { useIsOrganizationManager } from "@/features/organization/access"
 import {
   canManage as canManageOrganization,
@@ -19,15 +20,18 @@ import { WorkspaceGeneralForm } from "@/features/workspaces/WorkspaceGeneralForm
 import { useOrganizationContext } from "@/shared/api/organizations"
 import { useWorkspaces } from "@/shared/api/workspaces"
 import { useUrlState } from "@/shared/helpers/urlState"
+import { useSurfaces } from "@/shared/hooks/useDeployment"
 
 // Each capability is a tab of its own rather than a section of one long tab,
 // so everything a workspace can be given is named in the tab row.
 const TABS = [{ id: "general", label: "General" }, ...ACCESS_TABS]
+// Shown only where the deployment offers memory.
+const MEMORY_TAB = { id: "memory", label: "Memory" }
 
 const URL_DEFAULTS = { tab: "general" }
 
-function asTab(value: string): string {
-  return TABS.find((tab) => tab.id === value)?.id ?? "general"
+function asTab(value: string, tabs: readonly { id: string }[]): string {
+  return tabs.find((tab) => tab.id === value)?.id ?? "general"
 }
 
 /**
@@ -41,7 +45,9 @@ export function WorkspaceDetailPage({ workspaceId }: { workspaceId: string }) {
   const workspaces = useWorkspaces()
   const context = useOrganizationContext()
   const url = useUrlState(URL_DEFAULTS)
-  const tab = asTab(url.get("tab"))
+  const hasSurface = useSurfaces()
+  const tabs = hasSurface("memory") ? [...TABS, MEMORY_TAB] : TABS
+  const tab = asTab(url.get("tab"), tabs)
   const workspace = (workspaces.data ?? []).find(
     (row) => row.id === workspaceId,
   )
@@ -90,7 +96,7 @@ export function WorkspaceDetailPage({ workspaceId }: { workspaceId: string }) {
       {back}
       <PageIntro title={workspace.name} />
       <TabRow>
-        {TABS.map((entry) => (
+        {tabs.map((entry) => (
           <Tab
             key={entry.id}
             isActive={tab === entry.id}
@@ -104,6 +110,11 @@ export function WorkspaceDetailPage({ workspaceId }: { workspaceId: string }) {
         <WorkspaceGeneralForm
           key={workspace.id}
           workspace={workspace}
+          canManage={canManage}
+        />
+      ) : tab === MEMORY_TAB.id ? (
+        <WorkspaceMemorySection
+          workspaceId={workspace.id}
           canManage={canManage}
         />
       ) : (

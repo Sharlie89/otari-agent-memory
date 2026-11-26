@@ -85,6 +85,20 @@ from gateway.api.deps.invitations import (
     get_invitation_link,
     get_invitations,
 )
+from gateway.api.deps.memory import (
+    MemoryCallerDep,
+    MemoryServiceDep,
+    build_memory_service,
+    get_memory_caller,
+    get_memory_keys,
+    get_memory_ranking,
+    get_memory_service,
+    get_memory_tool_admission,
+    get_recall_vectors,
+    memory_caller_for,
+    memory_keys_for,
+    verify_memory_service_token,
+)
 from gateway.api.deps.organizations import (
     InvitationClaimSettingsDep,
     InvitationMailLimitDep,
@@ -309,8 +323,7 @@ from gateway.services.routing import (
     AutomaticRouter,
     RoutingService,
 )
-from gateway.services.tenancy import OrganizationService, organization_guardrail_runner
-from gateway.services.tenancy.authorization import WorkspaceAccess
+from gateway.services.tenancy import OrganizationService, WorkspaceAccess, organization_guardrail_runner
 from gateway.services.tenancy.org_provider_key_service import OrgProviderKeyService, refresh_org_provider_cache
 from gateway.services.tenancy.organization_guardrail_definition_service import (
     OrganizationGuardrailDefinitionService,
@@ -1388,4 +1401,16 @@ __all__ = [
     "workspace_keeps_trace_content",
     "workspace_members",
     "workspaces_keeping_content_for",
+    "verify_memory_service_token",
+    "memory_keys_for",
+    "build_memory_service",
+    "MemoryServiceDep",
+    "MemoryCallerDep",
+    "get_memory_caller",
+    "get_memory_keys",
+    "get_memory_ranking",
+    "get_memory_service",
+    "get_memory_tool_admission",
+    "get_recall_vectors",
+    "memory_caller_for",
 ]

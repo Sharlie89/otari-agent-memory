@@ -335,6 +335,7 @@ class TestSerializers:
             on_unavailable="block",
             enabled=True,
             applies_to_all_workspaces=True,
+            applies_to_memory=True,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -356,6 +357,7 @@ class TestSerializers:
             on_unavailable="block",
             enabled=True,
             applies_to_all_workspaces=True,
+            applies_to_memory=True,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )

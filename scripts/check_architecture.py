@@ -1345,7 +1345,7 @@ def check_domain_names(src_root: Path, domains: set[str]) -> list[str]:
 # the number is what has to come down.
 NON_DOMAIN_SERVICE_IMPORT_BASELINE: dict[str, int] = {
     "code_execution": 1,
-    "tenancy": 66,
+    "tenancy": 63,
 }
 
 
@@ -2596,6 +2596,34 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
     },
     "gateway.models.inference.VideoJobRecord": {
         "repository": "gateway/repositories/inference/video_job_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryKey": {
+        "repository": "gateway/repositories/memory/key_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryEntry": {
+        "repository": "gateway/repositories/memory/entry_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryProposal": {
+        "repository": "gateway/repositories/memory/proposal_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemorySignal": {
+        "repository": "gateway/repositories/memory/signal_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryRead": {
+        "repository": "gateway/repositories/memory/read_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryOrganizationSettings": {
+        "repository": "gateway/repositories/memory/organization_settings_repository.py",
+        "baseline": (),
+    },
+    "gateway.models.memory.MemoryWorkspaceSettings": {
+        "repository": "gateway/repositories/memory/settings_repository.py",
         "baseline": (),
     },
     "gateway.models.organizations.OrganizationInvitation": {

@@ -174,6 +174,7 @@ from gateway.exceptions.budget_exceptions import (
 )
 from gateway.exceptions.guardrails_exceptions import AnswerRefused
 from gateway.exceptions.inference_exceptions import StoredStateOnManagedCredentialError
+from gateway.exceptions.memory_exceptions import MemoryToolsRefusedError
 from gateway.exceptions.tools_exceptions import (
     CodeExecutionContainerBusyError,
     CodeExecutionDeclarationError,
@@ -292,6 +293,7 @@ from gateway.services.mcp_loop import (
     ToolBackend,
 )
 from gateway.services.mcp_stateless import failure_class
+from gateway.services.memory import AdmittedMemory, MemoryToolAdmission, MemoryToolBackend
 from gateway.services.model_access import (
     McpAccess,
     key_model_refusal,
@@ -923,6 +925,14 @@ def _guardrail_headers(response: Response | None) -> dict[str, str]:
     """
     value = response.headers.get(GUARDRAILS_RESULT_HEADER) if response is not None else None
     return {GUARDRAILS_RESULT_HEADER: value} if value else {}
+
+
+def _memory_headers(response: Response | None) -> dict[str, str]:
+    """What memory did, as recall wrote it on the injected ``Response``, carried across to a stream likewise."""
+    if response is None:
+        return {}
+    names = (MEMORY_ARM_HEADER, MEMORY_RECALLED_HEADER)
+    return {name: value for name in names if (value := response.headers.get(name)) is not None}
 
 
 def _end_user_headers(ctx: RequestContext) -> dict[str, str]:
@@ -3389,11 +3399,20 @@ class ToolContext:
         shared: SharedToolUse | None = None,
         web_provider_client: httpx.AsyncClient | None = None,
         guardrails: RequestGuardrails | None = None,
+        memory: MemoryToolBackend | None = None,
+        memory_declared: bool = False,
+        memory_recall: str | None = None,
     ) -> None:
         self.config = config
         # The request's guardrails, which the gateway's tools and the answer pass
         # through; None where the request runs none.
         self.guardrails = guardrails
+        # Whether the caller's tools held the memory declaration, which their remaining tools no longer do.
+        self.memory_declared = memory_declared
+        # Memory's tools for the request's caller, where it asked for them or its workspace offers them unasked.
+        self.memory = memory
+        # What automatic recall found for the request's newest turn, for the route to add to it; None for nothing.
+        self.memory_recall = memory_recall
         self.mcp_server_configs = mcp_server_configs
         # The per-user servers the loop offers a sign-in link for instead of opening.
         self.mcp_sign_in = tuple(mcp_sign_in)
@@ -3460,7 +3479,9 @@ class ToolContext:
         # Each candidate's tools by its provider and model, where the request's candidates are not all dispatched alike.
         self.candidate_variants: dict[tuple[str | None, str | None], CandidateVariant] = {}
         # The built-in tool names no MCP server may expose: those any attempt of the request runs here.
-        self.reserved_tool_names: frozenset[str] = frozenset(self.declared_gateway_tools)
+        self.reserved_tool_names: frozenset[str] = frozenset(self.declared_gateway_tools) | (
+            MemoryToolBackend.tool_names if memory is not None else frozenset()
+        )
 
     def for_candidate(self, provider: str | None, model: str | None) -> ToolContext:
         """The tools the candidate on ``provider`` and ``model`` is dispatched with: these, or its variant's.
@@ -3543,6 +3564,7 @@ class ToolContext:
             self.sandbox_tool_entry is not None
             or self.web_search_tool_entry is not None
             or self.web_fetch_tool_entry is not None
+            or self.memory_declared
         )
 
     @property
@@ -3607,6 +3629,7 @@ class ToolContext:
             or self.use_sandbox
             or self.use_web_search
             or self.use_web_fetch
+            or self.memory is not None
         )
 
     def build_web_backends(self) -> Sequence[WebSearchBackend | WebFetchBackend | WebRetrievalBackend]:
@@ -3902,6 +3925,12 @@ class DeclaredTools:
     tools_header: str | None
     web_fetch_header: str | None = None
     web_search_header: str | None = None
+    memory_header: str | None = None
+    # The text of the request's newest turn when the user wrote it, which automatic recall searches memory for;
+    # None for a turn that hands back tool results, which is no new question.
+    recall_query: str | None = None
+    # The user's turns before it, which recall searches with it: they often say what a follow-up is about.
+    recall_context: str | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -3942,6 +3971,8 @@ async def prepare_gateway_tools(
         web_candidates = await _admit_web_declarations(adapter, ctx, declared, web_policy)
         guardrails = await _admit_guardrails(adapter, ctx, response, declared)
         mcp = await _admit_mcp_servers(adapter, ctx, declared, backends.ports.mcp_server)
+        admitted_memory = await _admit_memory(adapter, ctx, declared, backends.ports.memory)
+        memory = admitted_memory.tools if admitted_memory is not None else None
         code = await _declare_code_execution(adapter, ctx, declared, backends)
         candidates = _combined(web_candidates, _decide_for_candidates(adapter, ctx, [code.provider_declaration()]))
         answers = await _admit_candidates(adapter, ctx, code, candidates, web_policy=web_policy)
@@ -3984,6 +4015,7 @@ async def prepare_gateway_tools(
 
     # Gotcha: the connection must not be held across the provider call that follows.
     await release_session(ctx.db)
+    memory_recall = await _recall_memory(response, admitted_memory, declared.recall_query, declared.recall_context)
 
     caps: dict[str, int] = {}
     for answer in admitted.values():
@@ -4017,7 +4049,7 @@ async def prepare_gateway_tools(
             sandbox_container_lease=code.container_lease,
             sandbox_containers=code.containers,
             web=web_access,
-            remaining_user_tools=web.remaining_user_tools,
+            remaining_user_tools=_without_memory_declarations(web.remaining_user_tools),
             max_tool_iterations=min(
                 declared.max_tool_iterations or DEFAULT_MAX_TOOL_ITERATIONS,
                 MAX_TOOL_ITERATIONS_CAP,
@@ -4030,6 +4062,9 @@ async def prepare_gateway_tools(
             shared=shared,
             web_provider_client=backends.ports.web_provider_client,
             guardrails=guardrails,
+            memory=memory,
+            memory_declared=any(_declares_memory(tool) for tool in web.remaining_user_tools or []),
+            memory_recall=memory_recall,
         )
 
     contexts = {claimed: _tool_context(answer) for claimed, answer in admitted.items()}
@@ -4047,6 +4082,86 @@ async def prepare_gateway_tools(
             key: variants[candidate.claimed] for key, candidate in zip(_candidates(ctx), candidates, strict=True)
         }
     return tool_ctx
+
+
+MEMORY_TOOL_TYPE = "otari_memory"
+MEMORY_HEADER_INVALID_DETAIL = "Otari-Memory must be 'on' or 'off'."
+MEMORY_DECLARED_AND_DECLINED_DETAIL = "The request declares otari_memory and sends Otari-Memory: off."
+MEMORY_NOT_OFFERED_DETAIL = "This deployment does not offer agent memory."
+
+
+def _declares_memory(entry: object) -> bool:
+    return isinstance(entry, dict) and entry.get("type") == MEMORY_TOOL_TYPE
+
+
+def _without_memory_declarations(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """The caller's tools without the memory declaration, which no provider is sent."""
+    if tools is None:
+        return None
+    return [tool for tool in tools if not _declares_memory(tool)]
+
+
+async def _recall_memory(
+    response: Response, admitted: AdmittedMemory | None, query: str | None, context: str | None
+) -> str | None:
+    """What automatic recall adds to the request's newest turn, saying on ``response`` what memory the request got.
+
+    ``Otari-Memory-Arm`` names the experiment arm of its session, and ``Otari-Memory-Recalled`` how many
+    entries recall handed over, wherever it ran.
+    """
+    if admitted is None:
+        return None
+    if admitted.arm is not None:
+        response.headers[MEMORY_ARM_HEADER] = admitted.arm
+    if admitted.recall is None or not query or not query.strip():
+        return None
+    text, count = await admitted.recall(
+        query[:MEMORY_RECALL_QUERY_MAX], context[-MEMORY_RECALL_QUERY_MAX:] if context else None
+    )
+    response.headers[MEMORY_RECALLED_HEADER] = str(count)
+    return text
+
+
+MEMORY_ARM_HEADER = "Otari-Memory-Arm"
+MEMORY_RECALLED_HEADER = "Otari-Memory-Recalled"
+# Characters of a turn automatic recall embeds: its start says what it asks. Of the turns before it, their end,
+# which is nearest the question.
+MEMORY_RECALL_QUERY_MAX = 2_000
+
+
+async def _admit_memory(
+    adapter: FormatAdapter[Any, Any],
+    ctx: RequestContext,
+    declared: DeclaredTools,
+    admission: MemoryToolAdmission | None,
+) -> AdmittedMemory | None:
+    """What memory the request's caller gets: its tools, automatic recall, and its session's experiment arm.
+
+    A request asks for the tools by declaring ``{"type": "otari_memory"}`` or sending ``Otari-Memory: on``, and
+    opts out of all of it with ``Otari-Memory: off``. Asking where memory cannot be had is refused.
+    """
+    header = (declared.memory_header or "").strip().lower()
+    if header not in ("", "on", "off"):
+        raise adapter.error(400, MEMORY_HEADER_INVALID_DETAIL, ErrorKind.INVALID_REQUEST)
+    in_tools = any(_declares_memory(tool) for tool in declared.tools or [])
+    if in_tools and header == "off":
+        raise adapter.error(400, MEMORY_DECLARED_AND_DECLINED_DETAIL, ErrorKind.INVALID_REQUEST)
+    asked = in_tools or header == "on"
+    if admission is None:
+        if asked:
+            raise adapter.error(400, MEMORY_NOT_OFFERED_DETAIL, ErrorKind.INVALID_REQUEST)
+        return None
+    model = ctx.resolved_provider.model if ctx.resolved_provider is not None else None
+    try:
+        return await admission.admit(
+            ctx.api_key,
+            asked=asked,
+            declined=header == "off",
+            session_label=ctx.source_label,
+            model=model,
+        )
+    except MemoryToolsRefusedError as exc:
+        raise domain_error(adapter, exc) from exc
 
 
 @dataclass(frozen=True)
@@ -5715,6 +5830,8 @@ async def _open_tool_backends(
     if tool_ctx.use_sandbox:
         sandbox = await stack.enter_async_context(tool_ctx.build_sandbox_backend())
         backends.append(sandbox)
+    if tool_ctx.memory is not None:
+        backends.append(await stack.enter_async_context(tool_ctx.memory))
     if mcp is not None:
         backends.append(mcp)
     # A server that refused the user's token at connect time, whose sign-in is over, gets a stand-in too.
@@ -5824,6 +5941,7 @@ class _ToolBackendKind(StrEnum):
     MCP = "MCP"
     SANDBOX = "sandbox"
     WEB_RETRIEVAL = "web retrieval"
+    MEMORY = "memory"
     COMBINED = "combined"
 
     @classmethod
@@ -5834,6 +5952,7 @@ class _ToolBackendKind(StrEnum):
                 (cls.MCP, bool(tool_ctx.mcp_server_configs) or bool(tool_ctx.mcp_sign_in)),
                 (cls.SANDBOX, tool_ctx.use_sandbox),
                 (cls.WEB_RETRIEVAL, tool_ctx.use_web_search or tool_ctx.use_web_fetch),
+                (cls.MEMORY, tool_ctx.memory is not None),
             )
             if used
         ]
@@ -6919,6 +7038,7 @@ async def run_single_attempt_stream(
             _container_headers(served_tools.container_lease)
             | _end_user_headers(ctx)
             | _guardrail_headers(response)
+            | _memory_headers(response)
             | served_by
         ),
         log_writer=ctx.log_writer,

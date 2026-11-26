@@ -29,6 +29,7 @@ from gateway.core.settings.health_checks import HealthCheckFeatureSettings
 from gateway.core.settings.identity import IdentitySettings
 from gateway.core.settings.inference import InferenceSettings
 from gateway.core.settings.mcp_catalog import McpCatalogSettings
+from gateway.core.settings.memory import MemorySettings
 from gateway.core.settings.organizations import OrganizationSettings
 from gateway.core.settings.pricing import PricingSettings
 from gateway.core.settings.providers import ProviderSettings
@@ -112,6 +113,9 @@ END_USER_BUDGET_HEADER = "Otari-End-User-Budget"
 # for clients that can add a header but not a body field (Claude Code's
 # ANTHROPIC_CUSTOM_HEADERS). See ``api/routes/_request_tags.py``.
 TAGS_HEADER = "Otari-Tags"
+# Request header a request routed through the gateway sends as ``on`` to ask for
+# memory's tools, or ``off`` to decline a workspace's offer. See docs/memory.md.
+MEMORY_HEADER = "Otari-Memory"
 # The version this deployment's API is served under. The root is built from it
 # rather than parsed back out of it, so nothing has to guess where the version
 # segment sits in a path.
@@ -653,6 +657,7 @@ class GatewayConfig(
     HealthCheckFeatureSettings,
     McpCatalogSettings,
     IdentitySettings,
+    MemorySettings,
     OrganizationSettings,
     ToolSettings,
     TraceSettings,

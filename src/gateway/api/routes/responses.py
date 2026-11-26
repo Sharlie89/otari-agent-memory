@@ -43,10 +43,11 @@ from gateway.api.routes._pipeline import (
     run_single_attempt_stream,
     scope_prompt_cache_key,
 )
+from gateway.api.routes._recall import responses_recall_context, responses_recall_query, responses_with_recall
 from gateway.api.routes._request_tags import RequestMetadata, RequestTagsHeader, forwarded_metadata, resolved_tags
 from gateway.api.routes._schema_derive import SESSION_LABEL_DESC, SESSION_LABEL_MAX_LENGTH, derive_request_base
 from gateway.api.routes._tools import _strip_gateway_fields
-from gateway.core.config import GatewayConfig
+from gateway.core.config import MEMORY_HEADER, GatewayConfig
 from gateway.core.error_codes import ErrorKind
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.core.usage import GatewayUsage
@@ -496,6 +497,7 @@ async def create_response(
         chars = len(str(request_body.input)) + len(str(getattr(request_body, "instructions", "") or ""))
         return chars, stats.vision_usage()
 
+    recall_input = request_body.model_dump(include={"input"}).get("input")
     declared = DeclaredTools(
         guardrails=request_body.guardrails,
         guardrail_targets=lambda: responses_targets(request_body),
@@ -507,6 +509,9 @@ async def create_response(
         code_execution_header=raw_request.headers.get(CODE_EXECUTION_HEADER),
         web_fetch_header=raw_request.headers.get(WEB_FETCH_HEADER),
         web_search_header=raw_request.headers.get(WEB_SEARCH_HEADER),
+        memory_header=raw_request.headers.get(MEMORY_HEADER),
+        recall_query=responses_recall_query(recall_input),
+        recall_context=responses_recall_context(recall_input),
     )
 
     try:
@@ -611,7 +616,8 @@ async def create_response(
         if request_fields.get("tools"):
             request_fields["tools"] = openai_to_responses_tools(request_fields["tools"])
 
-        input_payload, codex_extra_body = _codex_extra_body(request_fields.pop("input"), client_metadata)
+        input_value = responses_with_recall(request_fields.pop("input"), tools.memory_recall)
+        input_payload, codex_extra_body = _codex_extra_body(input_value, client_metadata)
         request_fields.pop("stream", None)
         request_fields.pop("model", None)
         bind_upstream_user(request_fields, ctx.upstream_user)

@@ -14,8 +14,7 @@ from gateway.core.database import get_db
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.repositories.budgets import BudgetRepositories
 from gateway.services.budgets import BudgetService
-from gateway.services.tenancy import OrganizationService
-from gateway.services.tenancy.authorization import WorkspaceAccess
+from gateway.services.tenancy import OrganizationService, WorkspaceAccess
 
 
 def get_budget_service(

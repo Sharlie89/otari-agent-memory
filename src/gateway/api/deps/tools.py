@@ -26,6 +26,7 @@ from gateway.api.deps.auth import (
 from gateway.api.deps.budgets import (
     get_budget_service,
 )
+from gateway.api.deps.memory import get_memory_tool_admission
 from gateway.api.deps.ports import (
     BillingPortDep,
     CodeExecutionPortDep,
@@ -83,14 +84,15 @@ from gateway.services.inference import (
     describe_port_error,
 )
 from gateway.services.log_writer import LogWriter
+from gateway.services.memory import MemoryToolAdmission
 from gateway.services.playground_service import LocalToolOffer, PlaygroundToolOffer
 from gateway.services.pricing_service import (
     resolve_tool_rate,
 )
 from gateway.services.tenancy import (
     OrganizationService,
+    WorkspaceAccess,
 )
-from gateway.services.tenancy.authorization import WorkspaceAccess
 from gateway.services.tenancy.workspace_mcp_server_service import WorkspaceMcpServers
 from gateway.services.tenancy.workspace_web_search_service import WorkspaceWebSearchPolicies, WorkspaceWebSearchService
 from gateway.services.tool_settings_service import load_overrides, stage_override
@@ -418,6 +420,8 @@ class ToolPorts:
     mcp_server: WorkspaceMcpServers
     web_search_policy: WorkspaceWebSearchPolicies
     web_provider_client: httpx.AsyncClient | None = None
+    # ``None`` where the deployment does not offer memory, or a test builds this by hand.
+    memory: MemoryToolAdmission | None = None
 
 
 async def get_tool_ports(
@@ -426,6 +430,7 @@ async def get_tool_ports(
     mcp_server: WorkspaceMcpServersDep,
     web_search_policy: WorkspaceWebSearchPoliciesDep,
     web_provider_client: OptionalWebProviderClientDep,
+    memory: Annotated[MemoryToolAdmission | None, Depends(get_memory_tool_admission)],
 ) -> ToolPorts:
     """Resolve the ports and policies a request's tools reach."""
     return ToolPorts(
@@ -434,6 +439,7 @@ async def get_tool_ports(
         mcp_server=mcp_server,
         web_search_policy=web_search_policy,
         web_provider_client=web_provider_client,
+        memory=memory,
     )
 
 

@@ -50,6 +50,7 @@ two of which mean off, therefore reduces here to plain membership.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast, get_args
 
@@ -60,6 +61,8 @@ from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gateway.core.config import GatewayConfig
+from gateway.core.database import create_session
 from gateway.exceptions.guardrails_exceptions import (
     OrganizationGuardrailAlreadyExistsError,
     OrganizationGuardrailCheckFailedError,
@@ -95,15 +98,25 @@ from gateway.models.secret_fields import (
 from gateway.models.tenancy import User
 from gateway.ports.growth_signal_port import GrowthAction, GrowthActivationEvent, GrowthSignalPort
 from gateway.repositories.tenancy import WorkspaceRepository
-from gateway.services.guardrails import GuardrailsNotReachableError, require_base_url, run_input_guardrails
+from gateway.services.guardrails import (
+    GuardrailsNotReachableError,
+    GuardrailVerdict,
+    InProcessGuardrail,
+    deployment_guardrails_url,
+    require_base_url,
+    run_input_guardrails,
+)
+from gateway.services.memory import GuardrailOutcome, GuardrailsUnavailableError
 from gateway.services.secret_box import (
     SecretBoxUnavailableError,
+    SecretDecryptionError,
     decrypt_mapping,
     decrypt_secret,
     encrypt_mapping,
     encrypt_secret,
     readable_mapping,
 )
+from gateway.services.tenancy.organization_guardrail_runner import handle as held_guardrail
 from gateway.services.tenancy.organization_service import OrganizationService
 from gateway.services.url_safety import UnsafeURLError, validate_mcp_url
 
@@ -245,6 +258,13 @@ class OrganizationGuardrailCreate(BaseModel):
         max_length=MAX_SCOPED_WORKSPACES,
         description="Workspaces this guardrail runs in. Must be empty when applies_to_all_workspaces is true",
     )
+    applies_to_memory: bool = Field(
+        default=True,
+        description=(
+            "True also runs this over what agents propose to agent memory in those workspaces, before it is kept; "
+            "false checks requests only"
+        ),
+    )
 
     @model_validator(mode="after")
     def _reject_redundant_scope(self) -> OrganizationGuardrailCreate:
@@ -324,6 +344,7 @@ class OrganizationGuardrailUpdate(BaseModel):
     enabled: bool | SkipJsonSchema[None] = None
     applies_to_all_workspaces: bool | SkipJsonSchema[None] = None
     workspace_ids: list[uuid.UUID] | None = Field(default=None, max_length=MAX_SCOPED_WORKSPACES)
+    applies_to_memory: bool | SkipJsonSchema[None] = None
 
     @model_validator(mode="after")
     def _reject_explicit_nulls(self) -> OrganizationGuardrailUpdate:
@@ -336,7 +357,15 @@ class OrganizationGuardrailUpdate(BaseModel):
         """
         nulled = [
             field
-            for field in ("profile", "mode", "on", "on_unavailable", "enabled", "applies_to_all_workspaces")
+            for field in (
+                "profile",
+                "mode",
+                "on",
+                "on_unavailable",
+                "enabled",
+                "applies_to_all_workspaces",
+                "applies_to_memory",
+            )
             if field in self.model_fields_set and getattr(self, field) is None
         ]
         if nulled:
@@ -381,6 +410,7 @@ class OrganizationGuardrailPublic(BaseModel):
     # are not consulted at all: reporting a list there would invite a client to
     # edit one that decides nothing.
     workspace_ids: list[uuid.UUID]
+    applies_to_memory: bool
     created_at: str
     updated_at: str
 
@@ -407,6 +437,7 @@ class OrganizationGuardrailPublic(BaseModel):
             enabled=guardrail.enabled,
             applies_to_all_workspaces=guardrail.applies_to_all_workspaces,
             workspace_ids=[] if guardrail.applies_to_all_workspaces else workspace_ids,
+            applies_to_memory=guardrail.applies_to_memory,
             created_at=guardrail.created_at.isoformat(),
             updated_at=guardrail.updated_at.isoformat(),
         )
@@ -473,8 +504,11 @@ async def resolve_organization_guardrails(
     *,
     organization_id: uuid.UUID,
     workspace_id: uuid.UUID,
+    for_memory: bool = False,
 ) -> list[ResolvedOrganizationGuardrail]:
     """The organization's guardrails that are in effect for one workspace.
+
+    ``for_memory`` keeps only those that also check what agents propose to its memory (``applies_to_memory``).
 
     One indexed read, on every request that reaches a completion endpoint,
     which is inherent rather than incidental: a mandate nobody
@@ -514,6 +548,8 @@ async def resolve_organization_guardrails(
         )
         .order_by(OrganizationGuardrail.profile)
     )
+    if for_memory:
+        stmt = stmt.where(OrganizationGuardrail.applies_to_memory.is_(True))
     rows = (await db.execute(stmt)).scalars().all()
     return [
         ResolvedOrganizationGuardrail(
@@ -541,6 +577,96 @@ def _stored_directions(value: object) -> list[GuardrailDirection]:
     known = get_args(GuardrailDirection)
     directions = [d for d in value if d in known] if isinstance(value, list) else []
     return cast("list[GuardrailDirection]", directions) or list(DEFAULT_DIRECTIONS)
+
+
+async def run_organization_guardrails(
+    mandates: Sequence[ResolvedOrganizationGuardrail],
+    text: str,
+    *,
+    organization_id: uuid.UUID,
+    default_url: str | None,
+    held: Callable[[uuid.UUID, uuid.UUID], InProcessGuardrail | None],
+) -> GuardrailVerdict:
+    """Run an organization's mandates over ``text`` as a request's input is run, with no caller or policy layer.
+
+    For what reaches no completion endpoint but still answers to the organization's mandates, such as what an
+    agent proposes to memory. Each mandate keeps its own endpoint, credential, ``mode`` and ``on_unavailable``,
+    and one that names a definition is answered by the guardrail this worker holds (``held``, the runner's
+    lookup), exactly as :func:`gateway.api.routes._pipeline.merge_guardrail_layers` leaves them when nothing
+    else is merged in: a profile an organization mandates once, so nothing here overlays.
+
+    Every entry is mandated, so an endpoint that fails its safety check is the mandate being unevaluable, governed
+    by its own settings, and never a caller's malformed request.
+
+    Raises:
+        GuardrailsNotReachableError: a mandate that fails closed could not be evaluated, or gave no verdict.
+    """
+    return await run_input_guardrails(
+        [mandate.config for mandate in mandates],
+        text,
+        default_url=default_url,
+        credentials={mandate.config.profile: mandate.credential for mandate in mandates if mandate.credential},
+        mandated=frozenset(mandate.config.profile for mandate in mandates),
+        in_process={
+            mandate.config.profile: held(organization_id, mandate.definition_id)
+            for mandate in mandates
+            if mandate.definition_id is not None
+        },
+    )
+
+
+class _MemoryMandate:
+    """The guardrails an organization mandates for one workspace, run over a memory proposal."""
+
+    def __init__(
+        self, config: GatewayConfig, organization_id: uuid.UUID, mandates: list[ResolvedOrganizationGuardrail]
+    ) -> None:
+        self._config = config
+        self._organization_id = organization_id
+        self._mandates = mandates
+
+    async def check(self, text: str) -> GuardrailOutcome:
+        try:
+            verdict = await run_organization_guardrails(
+                self._mandates,
+                text,
+                organization_id=self._organization_id,
+                default_url=deployment_guardrails_url(self._config),
+                held=held_guardrail,
+            )
+        except GuardrailsNotReachableError as exc:
+            # The reason names the profile and the endpoint, for the operator, and never what was checked.
+            logger.warning("A mandated guardrail could not check a memory proposal: %s", exc)
+            raise GuardrailsUnavailableError from None
+        return GuardrailOutcome(
+            blocked=tuple(result.profile for result in verdict.flagged if result.mode == "block"),
+            monitored=tuple(result.profile for result in verdict.flagged if result.mode != "block"),
+            unchecked=tuple(result.profile for result in verdict.results if result.status != "evaluated"),
+        )
+
+
+class MemoryMandates:
+    """The guardrails an organization mandates for a workspace's agent memory, read as the request path reads them."""
+
+    def __init__(self, config: GatewayConfig) -> None:
+        self._config = config
+
+    async def mandated(self, organization_id: uuid.UUID, workspace_id: uuid.UUID) -> _MemoryMandate | None:
+        try:
+            # On a session of its own, closed before any check runs, so no transaction idles over one.
+            async with create_session() as session:
+                mandates = await resolve_organization_guardrails(
+                    session, organization_id=organization_id, workspace_id=workspace_id, for_memory=True
+                )
+        except (SecretBoxUnavailableError, SecretDecryptionError) as exc:
+            # As on a request, a mandate whose credential will not open is not run unauthenticated.
+            logger.error(
+                "Organization guardrail credential could not be decrypted for organization %s: %s",
+                organization_id,
+                exc,
+            )
+            raise GuardrailsUnavailableError from None
+        return _MemoryMandate(self._config, organization_id, mandates) if mandates else None
 
 
 def _stored_mode(value: str) -> Literal["block", "monitor"]:
@@ -841,6 +967,7 @@ class OrganizationGuardrailService:
             encrypted_validate_kwargs=_encrypted_kwargs(restore_redacted_values(request.validate_kwargs, None)),
             enabled=request.enabled,
             applies_to_all_workspaces=request.applies_to_all_workspaces,
+            applies_to_memory=request.applies_to_memory,
         )
         self.db.add(guardrail)
         try:
@@ -954,6 +1081,8 @@ class OrganizationGuardrailService:
             guardrail.enabled = request.enabled
         if request.applies_to_all_workspaces is not None:
             guardrail.applies_to_all_workspaces = request.applies_to_all_workspaces
+        if request.applies_to_memory is not None:
+            guardrail.applies_to_memory = request.applies_to_memory
 
         # Flushed here rather than left to the commit, and *before* the scope is
         # rewritten, for the reason `workspace_mcp_server_service.update_server`
