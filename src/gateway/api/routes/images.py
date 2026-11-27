@@ -29,6 +29,7 @@ from gateway.core.config import GatewayConfig
 from gateway.log_config import logger
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
+from gateway.models.routing import InferenceOperation
 from gateway.schemas.inference import ImageEditForm
 from gateway.services.budgets import report_estimate
 from gateway.services.inference import InferenceService, image_billing, image_quantities
@@ -136,6 +137,7 @@ async def create_image(
         billing=billing,
         relabel=False,
         price_facts=facts,
+        policy_operation=InferenceOperation.IMAGE_GENERATION,
     )
     return _priced_body(outcome)
 
@@ -343,5 +345,6 @@ async def _run_edit(
         billing=billing,
         relabel=False,
         price_facts=facts,
+        policy_operation=InferenceOperation.IMAGE_EDITING,
     )
     return _priced_body(outcome)

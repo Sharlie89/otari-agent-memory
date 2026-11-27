@@ -6,6 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from any_llm.types.image import Image, ImagesResponse
 from any_llm.types.model import Model
 from fastapi.testclient import TestClient
 
@@ -142,3 +143,21 @@ def test_an_attachment_is_uploaded_only_on_a_credential_the_policy_admits(
 
     assert resp.status_code == status, resp.text
     assert [credential.api_key if credential is not None else None for credential in credentials] == uploaded_on
+
+
+@pytest.mark.parametrize(("policy", "status", "sent_on"), [("us-only", 200, ["sk-openai"]), ("eu-only", 403, [])])
+def test_an_image_is_generated_only_on_a_hosted_credential_the_policy_admits(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, policy: str, status: int, sent_on: list[str]
+) -> None:
+    monkeypatch.setattr(compiler_module, "hosted_routing_locality", lambda _name: "cloud")
+    image = ImagesResponse(created=0, data=[Image(b64_json="aW1hZ2U=")])
+    with patch("gateway.api.routes.images.aimage_generation", new=AsyncMock(return_value=image)) as mock:
+        resp = client.post(
+            f"{API_ROOT}/images/generations",
+            json={"model": policy, "prompt": "a red square", "user": "u1"},
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == status, resp.text
+    assert [call.kwargs["api_key"] for call in mock.await_args_list] == sent_on
+    assert "gpt-4o" not in resp.text
