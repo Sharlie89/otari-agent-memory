@@ -237,8 +237,8 @@ routing:
         allowed_localities: [local, cloud]
 ```
 
-Send `model: local-first` to Chat Completions, Messages or Responses. The local
-target leads, and the managed target can serve if the local target fails before
+Send `model: local-first` to Chat Completions, Messages, Responses, image
+generation or image edits. The local target leads, and the managed target can serve if the local target fails before
 committing a response. Set `allowed_localities: [local]` to exclude the managed
 target even when the local target fails, `[private]` for private infrastructure
 only, or `[cloud]` for cloud targets only. Declare the order you prefer in
@@ -250,7 +250,7 @@ weighted router recalculates shares over its eligible candidates.
 | `routing_locality` | `local`, `private` or `cloud`, declared by the operator on a `providers:` instance or a hosted provider. A `local` or `private` `providers:` instance needs an explicit HTTP(S) `api_base`. |
 | `eligibility.allowed_localities` | Non-empty allow-list of localities. |
 | `eligibility.required_capabilities` | Optional `image` and `pdf`: each target must take that input natively. |
-| `model_capabilities."<instance>:<model>".operations` | Optional narrowing per operation (`chat`, `messages`, `responses`): `enabled: false` takes the operation out of these policies, `streaming: false` keeps streamed requests away. |
+| `model_capabilities."<instance>:<model>".operations` | Optional narrowing per operation (`chat`, `messages`, `responses`, `image_generation`, `image_editing`): `enabled: false` takes the operation out of these policies, `streaming: false` keeps streamed requests away. |
 | `model_capabilities."<instance>:*".operations` | The same narrowing for every model of an instance, until a model declares its own. |
 
 ### What makes a target eligible
@@ -303,9 +303,22 @@ file processing and vision description separately if they handle sensitive data.
 The explain API and CLI evaluate a non-streaming Chat Completions request and
 list excluded targets and reasons.
 
-A policy with `eligibility` is only served by the completion endpoints. On other
-endpoints (embeddings, images, audio) its name is refused rather than resolved,
-even where a stored alias of the same name exists in another scope.
+Image generation and image edits are held to the same eligibility, for the
+`image_generation` and `image_editing` operations. Operations are assumed there
+too, so a model that only chats is tried for an image until its failure moves
+the request on; declare `image_generation: {enabled: false}` on it to leave it
+out of the plan instead:
+
+```yaml
+model_capabilities:
+  "edge:vision-chat":
+    operations:
+      image_generation: {enabled: false}
+      image_editing: {enabled: false}
+```
+
+A policy with `eligibility` is refused on embeddings and audio rather than
+resolved, even where a stored alias of the same name exists in another scope.
 
 Add the policy field to opt in. Existing policies require no migration. Before
 downgrading Otari, export and remove eligibility policies from both config and
@@ -491,12 +504,13 @@ request schemas.
 - Caller model allow-lists apply to every candidate.
 - Dynamic policies apply to Chat Completions, Messages, and Responses. A static
   policy can resolve on other model-taking endpoints.
-- Image generation and image edits follow a static policy's `on_failure`: when
-  the provider of one target fails, the next is sent the same request. Each
-  target is reserved for, priced and checked on its own, targets the caller's
-  key may not use are left out, and the response carries the same `Otari-Provider`,
-  `Otari-Model`, `Otari-Attempt-Count`, `Otari-Fallback` and `Otari-Deployment-Paid`
-  headers as a completion.
+- Image generation and image edits walk a policy's plan as a completion does,
+  `on_failure` and `eligibility` included: when the provider of one target
+  fails, the next is sent the same request. Targets are left out before dispatch
+  by the same checks, each is reserved for and priced on its own, and the
+  response carries the same `Otari-Provider`, `Otari-Model`,
+  `Otari-Attempt-Count`, `Otari-Fallback` and `Otari-Deployment-Paid` headers. A
+  conditional or routed policy is still refused there.
 - Embeddings and audio serve a static policy's `default` only and never try
   its `on_failure`: another embedding model answers in a different vector space,
   so falling over would return a wrong answer rather than an error.

@@ -456,7 +456,7 @@ scoping parameters.
 
 A static policy resolves anywhere an alias does, to its `default`. Image
 generation and image edits also try its `on_failure` targets when the default's
-provider fails; embeddings and audio do not (see
+provider fails, and hold to its `eligibility`; embeddings and audio do neither (see
 [Routing](routing.md#rules-and-limits)). A conditional, weighted, or priority policy
 applies only to Chat Completions, Messages, and Responses because other
 endpoints do not provide the request context needed to choose a candidate.

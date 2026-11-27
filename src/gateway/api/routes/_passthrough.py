@@ -102,11 +102,13 @@ from gateway.log_config import logger
 from gateway.model_labeling import relabel_model
 from gateway.models.api_keys import APIKey
 from gateway.models.pricing import ModelPricing
+from gateway.models.routing import InferenceOperation, PolicySpec
 from gateway.models.usage import DECISIONS_ENDPOINT, UsageLog
 from gateway.ports.billing_port import FUNDS_CHECK_UNAVAILABLE_DETAIL, NO_TOOLS, BillingPort, InsufficientFundsError
 from gateway.ports.model_provider_port import HostedAccessDeniedError, ModelProviderPort
 from gateway.rate_limit import check_rate_limit, rate_limit_headers
 from gateway.schemas.inference import DecisionRequest, DecisionResponse
+from gateway.services.alias_service import resolve_effective_alias
 from gateway.services.api_keys import (
     API_KEY_NO_USER_DETAIL,
     API_KEY_VALIDATION_FAILED_DETAIL,
@@ -153,6 +155,7 @@ from gateway.services.model_access import (
     resolve_request_allowlist,
     unresolvable_selector_detail,
 )
+from gateway.services.policy_store import resolve_effective_policy
 from gateway.services.pricing import NO_FACTS, PriceFacts, UsageCharge, apply_rules, can_price, price_usage
 from gateway.services.pricing_service import (
     ResolvedPricing,
@@ -170,7 +173,6 @@ from gateway.services.provider_kwargs import (
     missing_credential,
     org_key_slug_provider,
     require_declared_credential,
-    resolve_policy_fallbacks,
     resolve_provider_selector,
 )
 from gateway.services.providers import (
@@ -182,6 +184,7 @@ from gateway.services.providers import (
     serve_on_hosted_provider,
     unpriced_model_refusal,
 )
+from gateway.services.routing import NoEligibleCandidatesError, RoutingRequirements, compile_policy
 from gateway.services.upstream_redaction import PASSTHROUGH_PROVIDER_ERROR_DETAIL, stored_error_message
 from gateway.services.workspace_scope import organization_for_workspace_id, resolve_workspace_id
 
@@ -384,7 +387,7 @@ async def run_passthrough(
     reserve_before_resolve: bool = False,
     relabel: bool = True,
     price_facts: PriceFacts = NO_FACTS,
-    fallback: bool = False,
+    policy_operation: InferenceOperation | None = None,
 ) -> PassthroughOutcome[ResultT]:
     """Run the shared pass-through scaffold around a single provider call.
 
@@ -447,12 +450,15 @@ async def run_passthrough(
             pricing resolve first (the pricing key is the resolved instance).
         relabel: Rewrite the result's ``model`` field to the configured alias
             the caller used, so responses do not echo the aliased target.
-        fallback: Try a static policy's ``on_failure`` targets, in order, when
-            the provider serving the one before fails, and name the one that
-            served in the response headers. Each candidate is reserved for,
-            gated and priced on its own; a gate's refusal ends the request.
-            Not for an endpoint whose result depends on which model made it
-            (embeddings), where a fallback would answer wrongly rather than fail.
+        policy_operation: The operation this endpoint serves, given to walk
+            a routing policy's whole plan rather than serve its default: its
+            ``on_failure`` targets are tried in order when the provider of the
+            one before fails, and its ``eligibility`` is held to this operation
+            and its allowed localities, as on the completion routes. The
+            response headers name the candidate that served. Each candidate is
+            reserved for, gated and priced on its own; a gate's refusal ends the
+            request. Not for an endpoint whose result depends on which model
+            made it (embeddings), where a fallback would answer wrongly.
 
     Returns:
         The provider result plus the resolved selector and rate-limit headers.
@@ -601,6 +607,7 @@ async def run_passthrough(
                 organization_id=organization_id,
                 workspace_id=workspace_id,
                 country_gate=country_gate,
+                allowed_localities=allowed_localities,
             )
         except asyncio.CancelledError:
             await refund_reservation(db, reservation)
@@ -691,6 +698,7 @@ async def run_passthrough(
             organization_id=organization_id,
             workspace_id=workspace_id,
             country_gate=country_gate,
+            allowed_localities=allowed_localities,
         )
         if served is None:
             return None
@@ -741,6 +749,9 @@ async def run_passthrough(
             detail=unpriced.detail,
             headers=error_headers(unpriced.code),
         )
+
+    # The localities a policy with ``eligibility`` allows, held to on the hosted rung as well.
+    allowed_localities: frozenset[str] | None = None
 
     def _resolve(selector: str) -> ResolvedProvider:
         """Resolve one of the plan's candidates; a fallback target answers under the policy's name."""
@@ -1202,7 +1213,7 @@ async def run_passthrough(
             ) from e
 
         headers = rate_limit_headers(rate_limit_info) if rate_limit_info else {}
-        if fallback:
+        if policy_operation is not None:
             headers |= {
                 PROVIDER_HEADER: resolved.instance,
                 MODEL_HEADER: resolved.model,
@@ -1231,8 +1242,26 @@ async def run_passthrough(
         )
 
     plan: tuple[str, ...] = (model,)
-    if fallback and (fallbacks := resolve_policy_fallbacks(config, model, user_id, workspace_id=workspace_id)):
-        plan = _permitted_plan((model, *fallbacks), _resolve, await resolve_request_allowlist(db, api_key))
+    if policy_operation is not None and (spec := _walked_policy(config, model, user_id, workspace_id)) is not None:
+        try:
+            compiled = compile_policy(
+                config,
+                model,
+                spec,
+                user_id=user_id,
+                key_id=api_key_id,
+                allowlist=await resolve_request_allowlist(db, api_key),
+                workspace_id=workspace_id,
+                country_gate=country_gate,
+                requirements=RoutingRequirements(operation=policy_operation),
+            )
+        except NoEligibleCandidatesError as exc:
+            # The caller's detail names the policy and none of its targets; the reasons go to the activity log.
+            logger.warning("%s", exc.operator_detail)
+            await _log_rejection(exc.operator_detail, row_model=model, row_provider=None, status_code=exc.status_code)
+            raise HTTPException(status_code=exc.status_code, detail=exc.caller_detail) from exc
+        plan = tuple(f"{attempt.instance}:{attempt.model}" for attempt in compiled.attempts)
+        allowed_localities = compiled.attempts[0].allowed_localities
     for position, selector in enumerate(plan):
         try:
             return await _serve(selector, position, len(plan))
@@ -1248,26 +1277,25 @@ class _FellThrough(Exception):
     """A candidate's provider failed and the plan has another candidate to try."""
 
 
-def _permitted_plan(
-    plan: tuple[str, ...], resolve: Callable[[str], ResolvedProvider], allowlist: list[str] | None
-) -> tuple[str, ...]:
-    """``plan`` without the candidates the caller's key may not use, as a completion's plan is compiled.
+def _walked_policy(
+    config: GatewayConfig, model: str, user_id: str, workspace_id: uuid.UUID | None
+) -> PolicySpec | None:
+    """The policy whose plan a passthrough walks for ``model``, or ``None`` to serve ``model`` as it resolves.
 
-    A candidate that does not resolve stays, for the gates to refuse. A plan
-    with nothing permitted keeps its first candidate, whose gate answers the
-    refusal naming the model the caller asked for.
+    One with ``on_failure`` or ``eligibility``, whose plan does not depend on
+    request state. A one-target policy resolves as an alias does, and an alias
+    of the same name wins over a policy without ``eligibility``, as it does on
+    every other surface. A conditional or routed policy is left to resolution,
+    which refuses it.
     """
-    if allowlist is None:
-        return plan
-
-    def permitted(selector: str) -> bool:
-        try:
-            resolved = resolve(selector)
-        except (ValueError, AnyLLMError):
-            return True
-        return is_model_allowed(allowlist, f"{resolved.instance}:{resolved.model}")
-
-    return tuple(selector for selector in plan if permitted(selector)) or plan[:1]
+    spec = resolve_effective_policy(config, model, user_id, workspace_id=workspace_id)
+    if spec is None or spec.router_backend is not None or any(entry.when is not None for entry in spec.select):
+        return None
+    if spec.eligibility is not None:
+        return spec
+    if not spec.on_failure or resolve_effective_alias(config, model, user_id, workspace_id=workspace_id) is not None:
+        return None
+    return spec
 
 
 def _plan_exhausted(errors: Sequence[BaseException]) -> HTTPException:

@@ -217,7 +217,12 @@ def _usage_rows(client: TestClient) -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-def eligibility_client(routing_config: GatewayConfig) -> Generator[TestClient]:
+def eligibility_client(eligibility_config: GatewayConfig) -> Generator[TestClient]:
+    yield from build_test_client(eligibility_config)
+
+
+@pytest.fixture
+def eligibility_config(routing_config: GatewayConfig) -> GatewayConfig:
     routing_config.bootstrap_api_key = False
     routing_config.provider_max_retries = 0
     targets = {"edge": "http://edge.internal/v1", "cloud": "https://cloud.example/v1"}
@@ -246,7 +251,7 @@ def eligibility_client(routing_config: GatewayConfig) -> Generator[TestClient]:
                 "eligibility": {"allowed_localities": localities},
             }
         )
-    yield from build_test_client(routing_config)
+    return routing_config
 
 
 @pytest.mark.parametrize(
@@ -1303,6 +1308,78 @@ def test_image_generation_never_tries_a_policy_target_the_key_may_not_use(
 
     assert resp.status_code == status_code, resp.text
     assert [call.kwargs["model"] for call in mock.await_args_list] == tried
+
+
+def _image_bases(mock: AsyncMock) -> list[str]:
+    """The upstream each image call was sent to, in order."""
+    return [call.kwargs["api_base"] for call in mock.await_args_list]
+
+
+@pytest.mark.parametrize(
+    ("policy", "expected_bases", "expected_status"),
+    [
+        # Local first: the cloud target serves once the local one fails.
+        ("edge-first", ["http://edge.internal/v1", "https://cloud.example/v1"], 200),
+        # Local only: the request never leaves for the cloud target.
+        ("edge-only", ["http://edge.internal/v1"], 502),
+    ],
+)
+def test_image_generation_holds_to_the_policy_eligibility(
+    eligibility_client: TestClient, policy: str, expected_bases: list[str], expected_status: int
+) -> None:
+    _create_user(eligibility_client)
+    with patch(
+        "gateway.api.routes.images.aimage_generation",
+        new_callable=AsyncMock,
+        side_effect=[_http_error(503), _images_response()],
+    ) as mock:
+        resp = _generate_image(eligibility_client, policy)
+
+    assert resp.status_code == expected_status, resp.text
+    assert _image_bases(mock) == expected_bases
+    assert all("routing_locality" not in call.kwargs for call in mock.await_args_list)
+    if expected_status == 200:
+        assert _served_by(resp) == ("cloud", "chat-model", "2", "true", "false")
+
+
+@pytest.fixture
+def no_local_images_client(eligibility_config: GatewayConfig) -> Generator[TestClient]:
+    """The eligibility deployment with image generation declared off on its local target."""
+    edge = eligibility_config.model_capabilities["edge:chat-model"]
+    eligibility_config.model_capabilities["edge:chat-model"] = ModelCapabilityConfig.model_validate(
+        {
+            "operations": {
+                **edge.model_dump(mode="json")["operations"],
+                "image_generation": {"enabled": False},
+            }
+        }
+    )
+    yield from build_test_client(eligibility_config)
+
+
+def test_image_generation_skips_a_target_that_declares_the_operation_off(no_local_images_client: TestClient) -> None:
+    _create_user(no_local_images_client)
+    with patch(
+        "gateway.api.routes.images.aimage_generation", new_callable=AsyncMock, return_value=_images_response()
+    ) as mock:
+        resp = _generate_image(no_local_images_client, "edge-first")
+
+    assert resp.status_code == 200, resp.text
+    assert _image_bases(mock) == ["https://cloud.example/v1"]
+    assert _served_by(resp) == ("cloud", "chat-model", "1", "false", "false")
+
+
+def test_image_generation_with_no_eligible_target_is_refused_without_naming_one(
+    no_local_images_client: TestClient,
+) -> None:
+    _create_user(no_local_images_client)
+    with patch("gateway.api.routes.images.aimage_generation", new_callable=AsyncMock) as mock:
+        resp = _generate_image(no_local_images_client, "edge-only")
+
+    assert resp.status_code == 403, resp.text
+    mock.assert_not_awaited()
+    assert "edge-only" in resp.json()["detail"]
+    assert "chat-model" not in resp.text
 
 
 def test_a_dynamic_policy_is_not_a_model_name_outside_the_completion_routes(client: TestClient) -> None:
