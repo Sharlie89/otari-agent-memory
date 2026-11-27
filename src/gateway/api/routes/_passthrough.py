@@ -1166,16 +1166,24 @@ async def run_passthrough(
             # Once the provider has answered, the work is done and paid for, so only a failed call falls through.
             if not served and position < attempts - 1:
                 logger.warning(
-                    "Passthrough candidate failed, trying the next position=%d instance=%s model=%s",
+                    "Passthrough candidate failed, trying the next position=%d instance=%s model=%s error=%s",
                     position,
                     resolved.instance,
                     resolved.model,
+                    classify_local_attempt_error(e)[1],
                 )
                 failures.append(e)
                 unwritten_failure = failed_row
                 raise _FellThrough from e
             await log_writer.put(failed_row)
             if failures:
+                logger.warning(
+                    "All passthrough candidates failed; the last position=%d instance=%s model=%s error=%s",
+                    position,
+                    resolved.instance,
+                    resolved.model,
+                    classify_local_attempt_error(e)[1],
+                )
                 raise _plan_exhausted([*failures, e]) from e
 
             missing = missing_credential(e)
