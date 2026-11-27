@@ -232,8 +232,8 @@ The same report is `GET /api/v1/workspaces/{workspace_id}/memory/experiment`.
 | `memory_search` | The entries that best match a query, each with its kind, scope, trust level, confidence and age. |
 | `memory_get` | One entry, with the versions it replaced. |
 | `memory_propose` | Offers one fact, decision or procedure. It is a proposal until the consolidator decides on it. |
-| `memory_confirm` | Says an entry held up in use, which raises its confidence. |
-| `memory_flag` | Says an entry is wrong, stale, a duplicate or unsafe, which lowers its confidence. |
+| `memory_confirm` | Says an entry held up in use, which raises its confidence. Only an entry's current version takes it. |
+| `memory_flag` | Says an entry is wrong, stale, a duplicate or unsafe, which lowers its confidence. Only an entry's current version takes it. |
 | `memory_forget` | Deletes an entry and every version it replaced. Its author, its owner or a workspace manager may. |
 
 A workspace viewer can search and read, and changes nothing. An entry in the

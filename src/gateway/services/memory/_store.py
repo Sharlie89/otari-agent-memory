@@ -14,7 +14,15 @@ import numpy as np
 import numpy.typing as npt
 
 from gateway.metrics import REGISTRY, Counter
-from gateway.models.memory import MemoryEntry, MemoryKind, MemoryProposal, MemoryReviewReason, MemoryScope, MemoryTrust
+from gateway.models.memory import (
+    MemoryEntry,
+    MemoryKind,
+    MemoryProposal,
+    MemoryReviewReason,
+    MemoryScope,
+    MemoryStatus,
+    MemoryTrust,
+)
 from gateway.ports.memory_ranking_port import RankCandidate
 from gateway.repositories.memory import MemoryRepositories, NewEntry, NewProposal, parse_review_reason
 from gateway.services.memory._keys import WorkspaceKeys
@@ -101,9 +109,10 @@ class OpenedProposal:
 
 @dataclass(frozen=True)
 class OpenedEntry:
-    """One active entry version, opened for recall."""
+    """One entry version, opened: an active one for recall, or any status when it was asked for by id."""
 
     id: uuid.UUID
+    status: MemoryStatus
     scope: MemoryScope
     owner_user_id: uuid.UUID | None
     author_user_id: uuid.UUID | None
@@ -371,6 +380,7 @@ def _open_entry(row: MemoryEntry, key: bytes) -> OpenedEntry | None:
         return None
     return OpenedEntry(
         id=row.id,
+        status=row.status,
         scope=row.scope,
         owner_user_id=row.owner_user_id,
         author_user_id=row.author_user_id,
