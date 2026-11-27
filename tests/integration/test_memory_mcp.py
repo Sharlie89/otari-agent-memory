@@ -2,6 +2,7 @@
 
 import uuid
 from collections.abc import Callable, Generator, Sequence
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -298,19 +299,32 @@ def test_managers_turn_memory_on_see_what_it_holds_and_erase_it(
     db_session_factory: Callable[[], Session],
 ) -> None:
     switches = f"{API_ROOT}/workspaces/{_workspace_id(db_session_factory)}/memory"
-    body = {"enabled": True, "workspace_scope_enabled": True, "write_policy": "auto", "retention_days": 30}
+    body = {
+        "enabled": True,
+        "workspace_scope_enabled": True,
+        "write_policy": "auto",
+        "retention_days": 30,
+        "tombstone_days": 14,
+    }
     changed = memory_client.put(switches, json=body, headers=master_key_header)
     assert changed.status_code == 200, changed.text
     assert changed.json()["retention_days"] == 30 and changed.json()["deployment_enabled"] is True
+    assert changed.json()["tombstone_days"] == 14
 
     _call(memory_client, headers, "memory_propose", text=DEPLOY, kind="procedure")
-    assert memory_client.get(switches, headers=master_key_header).json()["proposals_waiting"] == 1
+    _call(memory_client, headers, "memory_propose", text="Run make test before every push", kind="procedure")
+    assert memory_client.get(switches, headers=master_key_header).json()["proposals_waiting"] == 2
     _consolidate(memory_client)
-    assert memory_client.get(switches, headers=master_key_header).json()["entries"] == {"active": 1}
+    assert memory_client.get(switches, headers=master_key_header).json()["entries"] == {"active": 2}
+    [pushed] = _call(memory_client, headers, "memory_search", query="test push", limit=1)["structuredContent"][
+        "results"
+    ]
+    assert pushed["observed_on"] == datetime.now(UTC).date().isoformat()
+    assert _call(memory_client, headers, "memory_forget", id=pushed["id"])["isError"] is False
 
     erased = memory_client.delete(switches, headers=master_key_header)
     assert erased.status_code == 200
-    assert (erased.json()["entries"], erased.json()["keys"]) == (1, 1)
+    assert (erased.json()["entries"], erased.json()["tombstones"], erased.json()["keys"]) == (1, 1, 1)
     assert _call(memory_client, headers, "memory_search", query="deploy")["structuredContent"]["results"] == []
     assert memory_client.get(switches, headers=master_key_header).json()["enabled"] is True
 

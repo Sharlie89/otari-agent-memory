@@ -116,6 +116,8 @@ _SETTING_NAMES = frozenset(
         "memory_enabled",
         "memory_engine",
         "memory_entry_max_length",
+        "memory_forgotten_member_similarity",
+        "memory_forgotten_similarity",
         "memory_key_rotation_days",
         "memory_max_entries_per_workspace",
         "memory_proposal_max_age_hours",

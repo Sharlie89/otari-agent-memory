@@ -22,7 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from bench import KEYS  # noqa: E402
 from consolidation_cases import CASES  # noqa: E402
 
-from gateway.services.memory._models import decision_request, parse_decision  # noqa: E402
+from gateway.services.memory._models import Note, decision_request, parse_decision  # noqa: E402
 from gateway.services.memory._service import guarded_decision  # noqa: E402
 
 API = "http://127.0.0.1:8010/api/v1"
@@ -65,7 +65,7 @@ def run(model: str) -> None:
     right = guarded_right = destroyed = guarded_destroyed = empty = 0
     latencies, misses = [], []
     for case in CASES:
-        messages, options = decision_request(case["proposal"], case["existing"])
+        messages, options = decision_request(Note(case["proposal"]), [Note(text) for text in case["existing"]])
         started = time.monotonic()
         try:
             answer = post("/chat/completions", {"model": model, "messages": messages, **options})

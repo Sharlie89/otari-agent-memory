@@ -1,8 +1,13 @@
 """Memory's pure rules: how it scores, what it refuses to keep, and how it reads a consolidation answer."""
 
+import json
+import uuid
+from datetime import date
+
 import pytest
 
-from gateway.services.memory._models import DECIDE_MAX_TOKENS, Decision, decision_request, parse_decision
+from gateway.core.settings.memory import MemorySettings
+from gateway.services.memory._models import DECIDE_MAX_TOKENS, Decision, Note, decision_request, parse_decision
 from gateway.services.memory._scoring import (
     CONFIDENCE_CEILING,
     CONFIDENCE_FLOOR,
@@ -12,7 +17,8 @@ from gateway.services.memory._scoring import (
     relevance,
 )
 from gateway.services.memory._screening import screen
-from gateway.services.memory._service import REPLACE_FLOOR, guarded_decision
+from gateway.services.memory._service import REPLACE_FLOOR, _forgotten, guarded_decision
+from gateway.services.memory._store import OpenedTombstone
 
 
 def test_confidence_follows_cqs_rules() -> None:
@@ -108,10 +114,46 @@ def test_an_answer_with_no_decision_decides_nothing(answer: str) -> None:
 
 
 def test_the_model_is_given_room_to_think_and_asked_for_json() -> None:
-    messages, options = decision_request("deploy with make", ["deploy with ci"])
+    messages, options = decision_request(Note("deploy with make"), [Note("deploy with ci")])
     assert messages[-1]["content"] == 'Existing notes:\n1. "deploy with ci"\n\nProposal: "deploy with make"'
     assert options == {"max_tokens": DECIDE_MAX_TOKENS, "temperature": 0, "response_format": {"type": "json_object"}}
     assert DECIDE_MAX_TOKENS >= 1024
+
+
+def test_the_model_is_told_when_each_note_and_the_proposal_were_observed() -> None:
+    messages, _ = decision_request(
+        Note("we moved the standup to 10:00 yesterday", date(2026, 11, 26)),
+        [Note("the standup is at 9:30", date(2026, 11, 2)), Note("standups are on Zoom")],
+    )
+
+    system, user = messages[0]["content"], messages[-1]["content"]
+    assert "observed" in system and "yesterday" in system
+    notes, proposal = user.split("\n\nProposal: ")
+    assert notes.splitlines()[1:] == [
+        '1. {"observed": "2026-11-02", "text": "the standup is at 9:30"}',
+        '2. "standups are on Zoom"',
+    ]
+    assert json.loads(proposal) == {"observed": "2026-11-26", "text": "we moved the standup to 10:00 yesterday"}
+
+
+def test_a_proposal_is_the_forgotten_fact_only_where_it_is_alike_enough_to_its_tombstone() -> None:
+    same, near, apart = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    tombstones = [
+        OpenedTombstone(same, (1.0, 0.0)),
+        # 0.89 alike: a neighbor that shares most of its words, and still not the same fact.
+        OpenedTombstone(near, (1.0, 0.5)),
+        OpenedTombstone(apart, (0.0, 1.0)),
+    ]
+
+    shared = MemorySettings().memory_forgotten_similarity
+    member = MemorySettings().memory_forgotten_member_similarity
+    assert (shared, member) == (0.9, 0.95)
+    assert _forgotten([2.0, 0.0], tombstones, shared) == [same]
+    assert _forgotten([1.0, 0.3], tombstones, shared) == [same, near]
+    # 0.996 alike to the first and 0.93 to its neighbor: a shared proposal waits for an admin on both, while a
+    # member's own, dropped with nobody to review it, is the forgotten fact only at the stricter floor.
+    assert _forgotten([1.0, 0.0875], tombstones, shared) == [same, near]
+    assert _forgotten([1.0, 0.0875], tombstones, member) == [same]
 
 
 @pytest.mark.parametrize(

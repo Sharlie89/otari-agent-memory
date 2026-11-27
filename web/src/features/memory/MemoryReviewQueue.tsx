@@ -26,13 +26,15 @@ const REASONS: Record<MemoryReviewReason, string> = {
   guardrail: "Flagged by a mandated guardrail",
   guardrail_unavailable: "Guardrail could not run",
   model: "The consolidation model failed",
+  forgotten: "Was forgotten before",
+  older_than_target: "Older than the entry it changes",
 }
 
 // What the entry beside a proposal is to it, by why it was held.
 function entryHeading(reason: HeldMemoryProposal["reason"]): string {
-  return reason === "conflict"
-    ? "The entry it contradicts"
-    : "The entry it changes"
+  if (reason === "conflict") return "The entry it contradicts"
+  if (reason === "older_than_target") return "The newer entry it changes"
+  return "The entry it changes"
 }
 
 function author(

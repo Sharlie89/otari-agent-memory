@@ -22,6 +22,7 @@ function memory(overrides: Partial<WorkspaceMemory> = {}): WorkspaceMemory {
     hide_external: false,
     retention_days: null,
     deployment_retention_days: 180,
+    tombstone_days: 90,
     auto_recall: true,
     recall_min_similarity: 0.65,
     recall_max_entries: 3,

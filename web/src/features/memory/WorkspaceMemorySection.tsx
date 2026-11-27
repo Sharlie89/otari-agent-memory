@@ -79,6 +79,7 @@ function switches(memory: WorkspaceMemory): UpdateWorkspaceMemoryRequest {
     recall_min_relevance: memory.recall_min_relevance,
     recall_rerank_skip_similarity: memory.recall_rerank_skip_similarity,
     experiment_holdout_percent: memory.experiment_holdout_percent,
+    tombstone_days: memory.tombstone_days,
   }
 }
 

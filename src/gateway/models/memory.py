@@ -1,10 +1,11 @@
 """ORM tables for agent memory: a workspace's data keys, its entries, the proposals in front of them, and their use.
 
 An entry is what agents recall; a proposal is what an agent offered, which the
-consolidator turns into an entry or drops. Both keep their text, and an entry its
-embedding, sealed under a data key of the workspace's own (``memory_keys``), so
-nothing an agent wrote is readable from the database without the deployment's
-content key.
+consolidator turns into an entry or drops; a tombstone is what is kept of a
+forgotten entry, so the same fact does not come straight back. Each keeps its
+text, or its embedding, sealed under a data key of the workspace's own
+(``memory_keys``), so nothing an agent wrote is readable from the database
+without the deployment's content key.
 
 Every row names its workspace, and on PostgreSQL each table but the settings is
 under row-level security keyed on ``otari.memory_workspace``, so a query that
@@ -41,9 +42,18 @@ MemorySignalKind = Literal["confirm", "flag"]
 MemoryWritePolicy = Literal["auto", "review"]
 MemoryProposalState = Literal["pending", "review"]
 # Why the consolidator left a proposal for an admin: the workspace's review policy, a contradiction with an entry,
-# an agent's change to an entry an admin reviewed, a block mandate that flagged it, or a model or a mandate that
-# could not run, pass after pass.
-MemoryReviewReason = Literal["policy", "conflict", "higher_trust", "guardrail", "model", "guardrail_unavailable"]
+# an agent's change to an entry an admin reviewed, a block mandate that flagged it, a model or a mandate that could
+# not run, pass after pass, a fact the workspace forgot, or evidence older than the entry it would replace.
+MemoryReviewReason = Literal[
+    "policy",
+    "conflict",
+    "higher_trust",
+    "guardrail",
+    "model",
+    "guardrail_unavailable",
+    "forgotten",
+    "older_than_target",
+]
 
 MEMORY_SCOPES: Final = get_args(MemoryScope)
 MEMORY_KINDS: Final = get_args(MemoryKind)
@@ -152,6 +162,10 @@ class MemoryEntry(Base):
     last_used_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
     )
+    # When the evidence was observed: when the agent proposed it, not when the consolidator kept it.
+    observed_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
     )
@@ -199,9 +213,44 @@ class MemoryProposal(Base):
     source_session_id: Mapped[str | None] = mapped_column(String(SOURCE_MAX_LENGTH))
     source_model: Mapped[str | None] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
     attempts: Mapped[int] = mapped_column(default=0, server_default="0")
+    # When the agent proposed it, which the entry it becomes keeps.
+    observed_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
     )
+
+
+class MemoryTombstone(Base):
+    """What is kept of a forgotten entry version until it expires: its embedding, sealed, and never its text.
+
+    A proposal this alike to it is not kept silently: a shared one waits for an admin, and a member's own is
+    dropped. Erasing the workspace deletes it, and so does the sweep once ``expires_at`` passes.
+    """
+
+    __tablename__ = "memory_tombstones"
+    __table_args__ = (
+        CheckConstraint(_one_of("scope", MEMORY_SCOPES), name="check_memory_tombstones_scope"),
+        CheckConstraint(_OWNER_MATCHES_SCOPE, name="check_memory_tombstones_owner"),
+        # What the consolidator compares a proposal with: the live tombstones of its scope.
+        Index("ix_memory_tombstones_workspace_scope", "workspace_id", "scope"),
+        # The sweep: the tombstones past their expiry.
+        Index("ix_memory_tombstones_workspace_expires_at", "workspace_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("workspace.id", ondelete="CASCADE"))
+    scope: Mapped[MemoryScope] = mapped_column(String(16))
+    # Set on member tombstones only; deleting the member deletes them.
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("user.id", ondelete="CASCADE"), index=True)
+    key_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("memory_keys.id", ondelete="RESTRICT"), index=True)
+    embedding_sealed: Mapped[str] = mapped_column(Text)
+    embedding_model: Mapped[str] = mapped_column(String(MODEL_NAME_MAX_LENGTH))
+    forgotten_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime())
 
 
 class MemorySignal(Base):
@@ -286,6 +335,7 @@ class MemoryWorkspaceSettings(Base):
             name="check_memory_settings_rerank_skip",
         ),
         CheckConstraint("experiment_holdout_percent BETWEEN 0 AND 50", name="check_memory_settings_experiment_holdout"),
+        CheckConstraint("tombstone_days BETWEEN 1 AND 3650", name="check_memory_settings_tombstone_days"),
     )
 
     workspace_id: Mapped[uuid.UUID] = mapped_column(
@@ -323,6 +373,8 @@ class MemoryWorkspaceSettings(Base):
     # Both are kept once it stops, so its results still read until another begins.
     experiment_started_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
     experiment_ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime())
+    # Days a forgotten entry's tombstone keeps the same fact from coming back unreviewed.
+    tombstone_days: Mapped[int] = mapped_column(default=90, server_default="90")
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), default=lambda: datetime.now(UTC), server_default=func.now(), onupdate=lambda: datetime.now(UTC)
     )

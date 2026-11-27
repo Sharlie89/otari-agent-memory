@@ -6,7 +6,7 @@ queue lists, what the next pass makes of an approved proposal, and who may act o
 
 import uuid
 from collections.abc import Callable, Generator, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from gateway.core.config import API_ROOT, GatewayConfig
-from gateway.models.memory import MemoryEntry, MemoryProposal
+from gateway.models.memory import MemoryEntry, MemoryProposal, MemoryTombstone
 from gateway.models.tenancy import DashboardSession, OrganizationMember, User, Workspace, WorkspaceMember
 from gateway.services.dashboard_session_service import SESSION_COOKIE_NAME, hash_session_token
 from gateway.services.memory import MemoryModels, ModelUse
@@ -245,6 +245,7 @@ def test_approving_a_conflict_replaces_the_entry_it_contradicts(
 
     [held] = _queue(deciding_client, master_key_header, workspace_id)
     assert (held["text"], held["reason"]) == (NEVER_FROM_MAIN, "conflict")
+    assert datetime.fromisoformat(held["entry"].pop("observed_at")).date() == date.fromisoformat(kept["observed_on"])
     assert held["entry"] == {"id": kept["id"], "text": DEPLOY, "version": 1, "trust": "agent"}
 
     approved = deciding_client.post(f"{_queue_url(workspace_id)}/{held['id']}/approve", headers=master_key_header)
@@ -332,3 +333,33 @@ def test_only_the_workspaces_managers_see_or_settle_what_waits(
     finally:
         memory_client.cookies.clear()
     assert _proposals(db_session_factory) == [("workspace", "review", "policy")]
+
+
+def test_a_forgotten_fact_proposed_again_waits_and_an_admin_may_let_it_back(
+    memory_client: TestClient,
+    master_key_header: dict[str, str],
+    db_session_factory: Callable[[], Session],
+) -> None:
+    workspace_id = _workspace_id(db_session_factory)
+    headers = _key(memory_client, master_key_header, db_session_factory)
+    _propose(memory_client, headers, DEPLOY)
+    _consolidate(memory_client)
+    [entry] = _remembered(memory_client, headers, DEPLOY)
+    assert _call(memory_client, headers, "memory_forget", id=entry["id"])["isError"] is False
+
+    # Another agent, on another session, learns the same thing and proposes it.
+    _propose(memory_client, _key(memory_client, master_key_header, db_session_factory), DEPLOY)
+    assert _consolidate(memory_client) == 1
+
+    [held] = _queue(memory_client, master_key_header, workspace_id)
+    assert (held["text"], held["reason"], held["entry"]) == (DEPLOY, "forgotten", None)
+    assert _remembered(memory_client, headers, DEPLOY) == []
+
+    approved = memory_client.post(f"{_queue_url(workspace_id)}/{held['id']}/approve", headers=master_key_header)
+    assert approved.status_code == 204, approved.text
+    assert _consolidate(memory_client) == 1
+
+    [back] = _remembered(memory_client, headers, DEPLOY)
+    assert (back["text"], back["trust"]) == (DEPLOY, "reviewed")
+    with db_session_factory() as session:
+        assert session.scalars(select(MemoryTombstone)).first() is None

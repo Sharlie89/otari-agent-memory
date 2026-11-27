@@ -2614,6 +2614,10 @@ MODEL_ACCESS: dict[str, ModelAccess] = {
         "repository": "gateway/repositories/memory/signal_repository.py",
         "baseline": (),
     },
+    "gateway.models.memory.MemoryTombstone": {
+        "repository": "gateway/repositories/memory/tombstone_repository.py",
+        "baseline": (),
+    },
     "gateway.models.memory.MemoryRead": {
         "repository": "gateway/repositories/memory/read_repository.py",
         "baseline": (),

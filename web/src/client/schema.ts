@@ -14915,7 +14915,7 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
-            /** @description The entry it would change: the one it contradicts, or the reviewed one it would replace. Approving it replaces this entry with it as a new version. */
+            /** @description The entry it would change: the one it contradicts, the reviewed one it would replace, or the newer one it would replace. Approving it replaces this entry with it as a new version. */
             entry: components["schemas"]["ReviewedEntryPublic"] | null;
             /**
              * Expires At
@@ -14940,9 +14940,9 @@ export interface components {
             model: string | null;
             /**
              * Reason
-             * @description policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run.
+             * @description policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run; forgotten: it is alike to an entry the workspace forgot, and approving it lets it back; older_than_target: it would replace an entry with evidence observed before that entry's.
              */
-            reason: ("policy" | "conflict" | "higher_trust" | "guardrail" | "model" | "guardrail_unavailable") | null;
+            reason: ("policy" | "conflict" | "higher_trust" | "guardrail" | "model" | "guardrail_unavailable" | "forgotten" | "older_than_target") | null;
             /** Session Id */
             session_id: string | null;
             /** Text */
@@ -21679,6 +21679,12 @@ export interface components {
              * Format: uuid
              */
             id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             * @description When the evidence it rests on was observed.
+             */
+            observed_at: string;
             /** Text */
             text: string;
             /**
@@ -25766,6 +25772,8 @@ export interface components {
             proposals: number;
             /** Reads */
             reads: number;
+            /** Tombstones */
+            tombstones: number;
             /**
              * Workspace Id
              * Format: uuid
@@ -25877,6 +25885,11 @@ export interface components {
              */
             retention_days: number | null;
             /**
+             * Tombstone Days
+             * @description Days a forgotten entry keeps the same fact, proposed again, from coming back without an admin.
+             */
+            tombstone_days: number;
+            /**
              * Workspace Id
              * Format: uuid
              */
@@ -25942,6 +25955,11 @@ export interface components {
             recall_rerank_skip_similarity?: number | null;
             /** Retention Days */
             retention_days?: number | null;
+            /**
+             * Tombstone Days
+             * @default 90
+             */
+            tombstone_days: number;
             /**
              * Workspace Scope Enabled
              * @default false

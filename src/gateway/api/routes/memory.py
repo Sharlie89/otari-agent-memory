@@ -187,6 +187,7 @@ def _workspace_public(memory: WorkspaceMemory, config: GatewayConfig) -> Workspa
         hide_external=memory.hide_external,
         retention_days=memory.retention_days,
         deployment_retention_days=config.memory_retention_days,
+        tombstone_days=memory.tombstone_days,
         auto_recall=memory.auto_recall,
         recall_min_similarity=memory.recall_min_similarity,
         recall_max_entries=memory.recall_max_entries,
@@ -250,6 +251,7 @@ async def set_workspace_memory(
         recall_min_relevance=body.recall_min_relevance,
         recall_rerank_skip_similarity=body.recall_rerank_skip_similarity,
         experiment_holdout_percent=body.experiment_holdout_percent,
+        tombstone_days=body.tombstone_days,
     )
     return _workspace_public(await service.change_switches(current_identity, workspace_id, change), config)
 
@@ -299,6 +301,7 @@ async def erase_workspace_memory(
         proposals=erased.proposals,
         reads=erased.reads,
         keys=erased.keys,
+        tombstones=erased.tombstones,
     )
 
 
@@ -316,7 +319,9 @@ def _held_public(held: HeldProposal) -> HeldProposalPublic:
         created_at=proposal.created_at,
         expires_at=held.expires_at,
         entry=(
-            ReviewedEntryPublic(id=entry.id, text=entry.text, version=entry.version, trust=entry.trust)
+            ReviewedEntryPublic(
+                id=entry.id, text=entry.text, version=entry.version, trust=entry.trust, observed_at=entry.observed_at
+            )
             if entry is not None
             else None
         ),

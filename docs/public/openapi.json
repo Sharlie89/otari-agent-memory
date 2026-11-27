@@ -11179,7 +11179,7 @@
                 "type": "null"
               }
             ],
-            "description": "The entry it would change: the one it contradicts, or the reviewed one it would replace. Approving it replaces this entry with it as a new version."
+            "description": "The entry it would change: the one it contradicts, the reviewed one it would replace, or the newer one it would replace. Approving it replaces this entry with it as a new version."
           },
           "expires_at": {
             "description": "When it is deleted if nobody decides on it.",
@@ -11222,7 +11222,9 @@
                   "higher_trust",
                   "guardrail",
                   "model",
-                  "guardrail_unavailable"
+                  "guardrail_unavailable",
+                  "forgotten",
+                  "older_than_target"
                 ],
                 "type": "string"
               },
@@ -11230,7 +11232,7 @@
                 "type": "null"
               }
             ],
-            "description": "policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run.",
+            "description": "policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run; forgotten: it is alike to an entry the workspace forgot, and approving it lets it back; older_than_target: it would replace an entry with evidence observed before that entry's.",
             "title": "Reason"
           },
           "session_id": {
@@ -25444,6 +25446,12 @@
             "title": "Id",
             "type": "string"
           },
+          "observed_at": {
+            "description": "When the evidence it rests on was observed.",
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
           "text": {
             "title": "Text",
             "type": "string"
@@ -25466,7 +25474,8 @@
           "id",
           "text",
           "version",
-          "trust"
+          "trust",
+          "observed_at"
         ],
         "title": "ReviewedEntryPublic",
         "type": "object"
@@ -34774,6 +34783,10 @@
             "title": "Reads",
             "type": "integer"
           },
+          "tombstones": {
+            "title": "Tombstones",
+            "type": "integer"
+          },
           "workspace_id": {
             "format": "uuid",
             "title": "Workspace Id",
@@ -34785,7 +34798,8 @@
           "entries",
           "proposals",
           "reads",
-          "keys"
+          "keys",
+          "tombstones"
         ],
         "title": "WorkspaceMemoryErased",
         "type": "object"
@@ -34925,6 +34939,11 @@
             "description": "Days an unused entry is kept; null keeps the deployment's.",
             "title": "Retention Days"
           },
+          "tombstone_days": {
+            "description": "Days a forgotten entry keeps the same fact, proposed again, from coming back without an admin.",
+            "title": "Tombstone Days",
+            "type": "integer"
+          },
           "workspace_id": {
             "format": "uuid",
             "title": "Workspace Id",
@@ -34956,6 +34975,7 @@
           "hide_external",
           "retention_days",
           "deployment_retention_days",
+          "tombstone_days",
           "auto_recall",
           "recall_min_similarity",
           "recall_max_entries",
@@ -35054,6 +35074,13 @@
               }
             ],
             "title": "Retention Days"
+          },
+          "tombstone_days": {
+            "default": 90,
+            "maximum": 3650.0,
+            "minimum": 1.0,
+            "title": "Tombstone Days",
+            "type": "integer"
           },
           "workspace_scope_enabled": {
             "default": false,
