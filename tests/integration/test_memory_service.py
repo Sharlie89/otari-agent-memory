@@ -23,6 +23,7 @@ from gateway.exceptions.memory_exceptions import (
     MemoryModelUnavailableError,
     MemoryOffError,
     MemoryRefusedError,
+    MemorySealingUnavailableError,
     MemoryTooLongError,
     NotYoursToForgetError,
     WorkspaceScopeOffError,
@@ -688,11 +689,10 @@ async def test_a_data_key_that_seals_nothing_is_deleted_but_never_the_newest(
     entry = (await async_db.execute(select(MemoryEntry))).scalar_one()
 
     assert (await memory().sweep(tenants.workspace)).keys == 0
-    # The tombstone is sealed under a fresh key, the old one being past its rotation, which then seals nothing.
+    # The tombstone is sealed under the forgotten entry's own key, past its rotation as it is, and keeps it.
     await memory().forget(tenants.alice, entry.id)
-    assert (await memory().sweep(tenants.workspace)).keys == 1
-    await _age(async_db, MemoryKey, "created_at", 31)
     assert (await memory().sweep(tenants.workspace)).keys == 0
+    assert len((await async_db.execute(select(MemoryKey))).scalars().all()) == 1
 
     await memory().propose(tenants.alice, text="Something new", kind="fact", scope="workspace", external=False)
     await memory().consolidate(tenants.workspace, limit=20)
@@ -814,6 +814,58 @@ async def test_a_members_forgotten_fact_proposed_again_is_dropped(
     assert await memory().search(tenants.alice, "I prefer short answers", limit=5) == []
     # Another member's memory is not held to it.
     await _learn(memory, tenants.bob, "I prefer short answers", scope="member", kind="fact")
+
+
+async def test_forgetting_seals_its_tombstones_under_the_entrys_own_key_and_never_waits_on_a_new_one(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = await _learn(memory, tenants.alice, DEPLOY)
+    sealed_under = (await async_db.execute(select(MemoryEntry.key_id).where(MemoryEntry.id == entry))).scalar_one()
+
+    async def no_key_source(*_: Any) -> None:
+        raise MemorySealingUnavailableError
+
+    monkeypatch.setattr(WorkspaceKeys, "for_sealing", no_key_source)
+
+    assert await memory().forget(tenants.alice, entry) == 1
+    assert (await async_db.execute(select(MemoryTombstone.key_id))).scalar_one() == sealed_under
+
+
+async def test_under_a_review_policy_a_proposal_that_cannot_be_embedded_waits_for_an_admin_at_once(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    await memory().forget(tenants.alice, await _learn(memory, tenants.alice, DEPLOY))
+    await _switch(async_db, tenants.workspace, write_policy="review")
+    memory.models.fail = True
+
+    await memory().propose(tenants.bob, text=DEPLOY, kind="procedure", scope="workspace", external=False)
+    assert await memory().consolidate(tenants.workspace, limit=20) == 1
+
+    assert await _held(async_db) == [("review", "policy")]
+    assert (await async_db.execute(select(MemoryProposal.attempts))).scalar_one() == 0
+    # Approving it checks the tombstones again before anything is stored.
+    memory.models.fail = False
+    await _approve_held(async_db)
+    await memory().consolidate(tenants.workspace, limit=20)
+    assert await _held(async_db) == [("review", "forgotten")]
+
+
+async def test_a_members_own_proposal_is_dropped_only_at_the_stricter_floor(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    forgotten = "I prefer short answers in code reviews"
+    alike = forgotten + " today"
+    assert 0.9 <= sum(a * b for a, b in zip(_vector(forgotten), _vector(alike), strict=True)) < 0.95
+
+    await memory().forget(tenants.alice, await _learn(memory, tenants.alice, forgotten, scope="member", kind="fact"))
+    await memory().forget(tenants.alice, await _learn(memory, tenants.alice, forgotten, scope="workspace", kind="fact"))
+    for scope in ("member", "workspace"):
+        await memory().propose(tenants.alice, text=alike, kind="fact", scope=scope, external=False)
+    await memory().consolidate(tenants.workspace, limit=20)
+
+    # Alike enough to hold a shared one for an admin, and not to drop a member's own unreviewed.
+    assert await _held(async_db) == [("review", "forgotten")]
+    assert [found.entry.text for found in await memory().search(tenants.alice, alike, limit=5)] == [alike]
 
 
 async def test_a_tombstone_keeps_a_fact_out_for_the_workspaces_tombstone_days_and_the_sweep_deletes_it(

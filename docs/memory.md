@@ -279,8 +279,8 @@ that date.
      it go on unchecked, as it would a request.
    - Where nothing is mandated for the workspace, no guardrail is called.
 3. **Comparison.** The consolidator embeds the proposal and compares it with the
-   nearest entries of its scope, and with what its scope forgot: one at least
-   0.9 alike to a forgotten entry waits for an admin, or is dropped (see
+   nearest entries of its scope, and with what its scope forgot: one alike
+   enough to a forgotten entry waits for an admin, or is dropped (see
    [Forgetting](#forgetting)).
 4. **Decision.** The consolidation model answers with one decision and nothing
    else: add, update (a new version of an entry), no change, or conflict. What
@@ -367,14 +367,27 @@ The consolidator settles a member-scope proposal itself:
 ### Forgetting
 
 `memory_forget` deletes an entry and every version it replaced, and keeps a
-tombstone of each version: its embedding, sealed like an entry's, and never its
-text. For the workspace's `tombstone_days` (90 by default) a proposal at least
-0.9 alike to one is not kept silently, whichever agent proposes it:
+tombstone of each version: its embedding, sealed under the same data key as
+the entry, and never its text. Forgetting therefore needs no new key and does
+not wait on the key source. For the workspace's `tombstone_days` (90 by default)
+a proposal alike enough to one is not kept silently, whichever agent proposes
+it:
 
-- A shared one waits for an admin with the reason `forgotten`. Approving it lets
-  the fact back and lifts the tombstone; discarding it leaves the tombstone.
-- A member's own is dropped: the member who forgot it is the authority over
-  their memory.
+- A shared one at least `memory_forgotten_similarity` alike (0.9) waits for an
+  admin with the reason `forgotten`. Approving it lets the fact back and lifts
+  the tombstone; discarding it leaves the tombstone.
+- A member's own at least `memory_forgotten_member_similarity` alike (0.95) is
+  dropped: the member who forgot it is the authority over their memory. The
+  floor is stricter because nobody reviews a member's memory to catch a new
+  fact dropped by mistake.
+
+Both values are on the embedding model's own scale, so measure them against
+the model you set in `memory_embedding_model`.
+
+Under the `review` write policy a shared proposal is embedded first when its
+scope has tombstones, so the admin sees `forgotten` rather than `policy`. If the
+embedding model cannot answer, the proposal waits for an admin as `policy` at
+once; approving it checks the tombstones again before anything is stored.
 
 Each scope is compared only with its own tombstones, so a member's forgotten
 fact never holds back the shared memory or another member's. A tombstone is
@@ -505,6 +518,8 @@ master key opens it. Keep its port on the deployment's private network.
 | `memory_service_token` | unset | The secret a gateway shows the memory service, set on both. |
 | `memory_max_entries_per_workspace` | `5000` | Active entries one workspace holds; past it, the least used is retired. |
 | `memory_entry_max_length` | `2000` | Longest proposal, in characters. |
+| `memory_forgotten_similarity` | `0.9` | How alike a shared proposal must be to a forgotten entry to wait for an admin. On the embedding model's scale. See [Forgetting](#forgetting). |
+| `memory_forgotten_member_similarity` | `0.95` | How alike a member's own proposal must be to an entry they forgot to be dropped. Never below `memory_forgotten_similarity`. |
 | `memory_retention_days` | `180` | Days an unused entry or version is kept. |
 | `memory_proposal_max_age_hours` | `24` | Hours a proposal is kept, decided or not. |
 | `memory_read_retention_days` | `365` | Days a read record is kept. |

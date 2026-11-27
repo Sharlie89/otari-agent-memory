@@ -96,8 +96,6 @@ COMPARE_FLOOR = 0.75
 SAME_FLOOR = 0.95
 # How alike a proposal must be to an entry for the model's update or no_change of it to stand.
 REPLACE_FLOOR = 0.85
-# How alike a proposal must be to a forgotten entry's tombstone to count as the same fact coming back.
-FORGOTTEN_FLOOR = 0.9
 # Days a forgotten entry's tombstone is kept where a workspace says nothing else.
 DEFAULT_TOMBSTONE_DAYS = 90
 # Passes a proposal may fail on a model, or on a mandated guardrail that could not run, before it waits for an
@@ -500,7 +498,8 @@ class MemoryService:
             MemoryOffError: the workspace has not turned memory on.
             MemoryEntryNotFoundError: the caller may recall no entry by that id.
             NotYoursToForgetError: the caller may recall it but not remove it.
-            MemorySealingUnavailableError: no data key could seal its tombstones, so nothing was deleted.
+            MemorySealingUnavailableError: a version's own data key no longer opens and no current one could be
+                had, so nothing was deleted.
         """
         _require_write(caller)
         async with self._uow:
@@ -1060,8 +1059,16 @@ class MemoryService:
             async with self._uow:
                 await self._hold(proposal, "policy")
             return 1
-        [vector] = await self._embed([proposal.text], workspace_id, proposal.provenance.api_key_id)
-        forgotten = _forgotten(vector, tombstones)
+        try:
+            [vector] = await self._embed([proposal.text], workspace_id, proposal.provenance.api_key_id)
+        except MemoryModelUnavailableError:
+            if not held_by_policy:
+                raise
+            # An admin reads it either way, and approving it checks the tombstones again, so it waits now.
+            async with self._uow:
+                await self._hold(proposal, "policy")
+            return 1
+        forgotten = _forgotten(vector, tombstones, self._forgotten_floor(proposal.scope))
         lifts = approved and proposal.review_reason == "forgotten"
         if (forgotten and not lifts) or held_by_policy:
             async with self._uow:
@@ -1328,6 +1335,15 @@ class MemoryService:
             entry_ids=entry_ids,
         )
 
+    def _forgotten_floor(self, scope: MemoryScope) -> float:
+        """How alike a proposal of ``scope`` must be to a tombstone to be the forgotten fact coming back.
+
+        A member's own is dropped with no admin to catch a mistake, so its floor is the stricter one, and never below
+        the shared one.
+        """
+        shared = self._config.memory_forgotten_similarity
+        return max(shared, self._config.memory_forgotten_member_similarity) if scope == "member" else shared
+
     async def _embed(
         self, texts: list[str], workspace_id: uuid.UUID, api_key_id: str | None, *, endpoint: str = EMBEDDING_ENDPOINT
     ) -> list[list[float]]:
@@ -1363,9 +1379,9 @@ def guarded_decision(decision: Decision, alike: Sequence[float]) -> Decision:
     return decision
 
 
-def _forgotten(vector: Sequence[float], tombstones: Sequence[OpenedTombstone]) -> list[uuid.UUID]:
-    """The tombstones ``vector`` is alike enough to for the proposal to be the forgotten fact coming back."""
-    return [tombstone.id for tombstone in tombstones if cosine(vector, tombstone.embedding) >= FORGOTTEN_FLOOR]
+def _forgotten(vector: Sequence[float], tombstones: Sequence[OpenedTombstone], floor: float) -> list[uuid.UUID]:
+    """The tombstones ``vector`` is at least ``floor`` alike to: the proposal is the forgotten fact coming back."""
+    return [tombstone.id for tombstone in tombstones if cosine(vector, tombstone.embedding) >= floor]
 
 
 def _require_write(caller: MemoryCaller) -> None:

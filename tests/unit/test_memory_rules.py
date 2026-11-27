@@ -6,6 +6,7 @@ from datetime import date
 
 import pytest
 
+from gateway.core.settings.memory import MemorySettings
 from gateway.services.memory._models import DECIDE_MAX_TOKENS, Decision, Note, decision_request, parse_decision
 from gateway.services.memory._scoring import (
     CONFIDENCE_CEILING,
@@ -16,7 +17,7 @@ from gateway.services.memory._scoring import (
     relevance,
 )
 from gateway.services.memory._screening import screen
-from gateway.services.memory._service import FORGOTTEN_FLOOR, REPLACE_FLOOR, _forgotten, guarded_decision
+from gateway.services.memory._service import REPLACE_FLOOR, _forgotten, guarded_decision
 from gateway.services.memory._store import OpenedTombstone
 
 
@@ -144,9 +145,15 @@ def test_a_proposal_is_the_forgotten_fact_only_where_it_is_alike_enough_to_its_t
         OpenedTombstone(apart, (0.0, 1.0)),
     ]
 
-    assert _forgotten([2.0, 0.0], tombstones) == [same]
-    assert _forgotten([1.0, 0.3], tombstones) == [same, near]
-    assert FORGOTTEN_FLOOR == 0.9
+    shared = MemorySettings().memory_forgotten_similarity
+    member = MemorySettings().memory_forgotten_member_similarity
+    assert (shared, member) == (0.9, 0.95)
+    assert _forgotten([2.0, 0.0], tombstones, shared) == [same]
+    assert _forgotten([1.0, 0.3], tombstones, shared) == [same, near]
+    # 0.996 alike to the first and 0.93 to its neighbor: a shared proposal waits for an admin on both, while a
+    # member's own, dropped with nobody to review it, is the forgotten fact only at the stricter floor.
+    assert _forgotten([1.0, 0.0875], tombstones, shared) == [same, near]
+    assert _forgotten([1.0, 0.0875], tombstones, member) == [same]
 
 
 @pytest.mark.parametrize(

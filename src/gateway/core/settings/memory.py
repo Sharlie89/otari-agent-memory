@@ -83,6 +83,26 @@ class MemorySettings(BaseModel):
         le=16_000,
         description="Longest text, in characters, one proposal or entry may hold.",
     )
+    memory_forgotten_similarity: Annotated[float, OMITTED] = Field(
+        default=0.9,
+        gt=0,
+        le=1,
+        description=(
+            "How alike a shared proposal must be to a forgotten entry, on the embedding model's own scale, to wait for "
+            "an admin as that entry coming back. Measure it against memory_embedding_model: another model may want "
+            "another value."
+        ),
+    )
+    memory_forgotten_member_similarity: Annotated[float, OMITTED] = Field(
+        default=0.95,
+        gt=0,
+        le=1,
+        description=(
+            "How alike a member's own proposal must be to an entry they forgot to be dropped as it coming back. "
+            "Stricter than memory_forgotten_similarity, and never below it, since nobody reviews a member's memory "
+            "to catch a new fact dropped by mistake."
+        ),
+    )
     memory_retention_days: Annotated[int, OMITTED] = Field(
         default=180,
         gt=0,

@@ -25,7 +25,7 @@ from gateway.models.memory import (
 )
 from gateway.ports.memory_ranking_port import RankCandidate
 from gateway.repositories.memory import MemoryRepositories, NewEntry, NewProposal, NewTombstone, parse_review_reason
-from gateway.services.memory._keys import WorkspaceKeys
+from gateway.services.memory._keys import OpenKey, WorkspaceKeys
 from gateway.services.memory._sealing import (
     SealedField,
     SealedValueError,
@@ -116,6 +116,7 @@ class OpenedEntry:
 
     id: uuid.UUID
     status: MemoryStatus
+    key_id: uuid.UUID
     scope: MemoryScope
     owner_user_id: uuid.UUID | None
     author_user_id: uuid.UUID | None
@@ -238,10 +239,13 @@ class EntryStore:
     ) -> int:
         """Seal and stage a tombstone for each forgotten entry version that has an embedding; how many.
 
-        Only the embedding is kept, sealed afresh for the tombstone's own row, never the text.
+        Only the embedding is kept, sealed afresh for the tombstone's own row, never the text, and under the key
+        that sealed the entry, which opening it just opened: forgetting needs no new key, so it never waits on a
+        key source. Only a key that no longer opens falls back to the workspace's current one.
 
         Raises:
-            MemorySealingUnavailableError: no data key could be had, so nothing was staged.
+            MemorySealingUnavailableError: a version's own key did not open and no current one could be had, so
+                nothing was staged.
         """
         embedded = [
             (entry, entry.embedding, entry.embedding_model)
@@ -250,9 +254,18 @@ class EntryStore:
         ]
         if not embedded:
             return 0
-        key = await self._keys.for_sealing(self._repos.keys, workspace_id)
+        opened = await self._keys.for_opening(
+            self._repos.keys, workspace_id, {entry.key_id for entry, _, _ in embedded}
+        )
+        current: OpenKey | None = None
         tombstones: list[NewTombstone] = []
         for entry, embedding, embedding_model in embedded:
+            plaintext = opened.get(entry.key_id)
+            if plaintext is not None:
+                key = OpenKey(entry.key_id, plaintext)
+            else:
+                current = current or await self._keys.for_sealing(self._repos.keys, workspace_id)
+                key = current
             tombstone_id = uuid.uuid4()
             aad = associated_data(
                 workspace_id=workspace_id,
@@ -474,6 +487,7 @@ def _open_entry(row: MemoryEntry, key: bytes) -> OpenedEntry | None:
     return OpenedEntry(
         id=row.id,
         status=row.status,
+        key_id=row.key_id,
         scope=row.scope,
         owner_user_id=row.owner_user_id,
         author_user_id=row.author_user_id,
