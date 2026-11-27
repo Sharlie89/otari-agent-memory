@@ -6,7 +6,7 @@ writes in another.
 """
 
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, Protocol
@@ -60,6 +60,7 @@ from gateway.services.memory._experiment import (
 )
 from gateway.services.memory._guardrails import GuardrailsUnavailableError, MandatedGuardrails, MemoryGuardrails
 from gateway.services.memory._keys import WorkspaceKeys
+from gateway.services.memory._lexical import IDENTIFIER_ADMIT, QUERY_MAX_CHARS
 from gateway.services.memory._models import (
     EMBEDDING_ENDPOINT,
     RECALL_ENDPOINT,
@@ -362,8 +363,20 @@ class MemoryService:
 
     # -- What agents call ---------------------------------------------------
 
-    async def search(self, caller: MemoryCaller, query: str, *, limit: int) -> list[Recalled]:
+    async def search(
+        self,
+        caller: MemoryCaller,
+        query: str,
+        *,
+        limit: int,
+        kinds: Collection[MemoryKind] | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> list[Recalled]:
         """The entries the caller may recall that best match ``query``, best first.
+
+        ``kinds`` keeps only entries of those kinds, and ``since``/``until`` only versions created in that window,
+        both ends included. They narrow what is listed before it is ranked.
 
         Raises:
             MemoryOffError: the workspace has not turned memory on.
@@ -384,20 +397,20 @@ class MemoryService:
                     include_workspace=switches.workspace_scope,
                     include_external=not switches.hide_external,
                     embedding_model=model,
+                    kinds=kinds,
+                    created_from=since,
+                    created_until=until,
                 )
+        most = max(1, min(limit, SEARCH_LIMIT_MAX))
         best = await self._rank(
-            caller.workspace_id,
-            candidates,
-            [vector],
-            order="relevance",
-            keep_top=max(1, min(limit, SEARCH_LIMIT_MAX)),
+            caller.workspace_id, candidates, [vector], order="relevance", keep_top=most, texts=[query]
         )
         with timed("hand_over"):
             async with self._uow:
-                opened = await self._store.opened(caller.workspace_id, [ranked.id for ranked in best])
+                opened = await self._store.opened(caller.workspace_id, [ranked.id for ranked in best[:most]])
                 found = [
-                    Recalled(opened[ranked.id], relevance(ranked.similarity, ranked.confidence))
-                    for ranked in best
+                    Recalled(opened[ranked.id], relevance(_score(ranked), ranked.confidence))
+                    for ranked in best[:most]
                     if ranked.id in opened
                 ]
                 await self._record_read(caller, "memory_search", [recalled.entry.id for recalled in found])
@@ -531,7 +544,12 @@ class MemoryService:
         the turn, with ``context`` after it as an aside, and those reaching the workspace's score are handed over.
         The turn comes first: led by the conversation before it, a reranker favours entries about that
         conversation even once the subject changed. Otherwise, or when the check fails, entries clearing the
-        similarity floor are, less those well below the most alike.
+        similarity floor are, less those well below the most alike, and so are entries sharing an identifier the
+        turn names (see ``_lexical``), however alike their embedding.
+
+        Where the lexical lane ran, the entries the reranker reads, and what is handed over, are ordered by the
+        fused score rather than by similarity; the floor, the margin and the reranker's score still decide what
+        is handed over.
 
         Empty where the workspace does not recall automatically. Only what is handed over is recorded as read.
 
@@ -564,15 +582,22 @@ class MemoryService:
                 )
         # The most alike, which the rerank model checks, and every other alike enough to be handed over without it.
         alike = await self._rank(
-            caller.workspace_id, candidates, vectors, order="similarity", keep_top=RERANK_CANDIDATES, keep_above=floor
+            caller.workspace_id,
+            candidates,
+            vectors,
+            order="similarity",
+            keep_top=RERANK_CANDIDATES,
+            keep_above=floor,
+            texts=texts,
         )
+        most_alike = max((candidate.similarity for candidate in alike), default=floor)
         # Each kept entry's score, id and confidence; texts are opened only for what the reranker reads and what
         # is handed over.
         kept: list[tuple[float, uuid.UUID, float]] | None = None
         opened: dict[uuid.UUID, OpenedEntry] = {}
         # Where the workspace says how alike is alike enough to need no check, an entry that alike is handed over
         # by similarity, without the rerank model's call.
-        unmistakable = sure is not None and bool(alike) and alike[0].similarity >= sure
+        unmistakable = sure is not None and bool(alike) and most_alike >= sure
         if unmistakable:
             RERANK_SKIPPED.inc()
         if min_relevance is not None and self._models.can_rerank and not unmistakable:
@@ -587,11 +612,11 @@ class MemoryService:
             if relevant is not None:
                 kept = [(score, entry.id, entry.confidence) for score, entry in relevant if score >= min_relevance]
         if kept is None:
-            best = alike[0].similarity if alike else floor
             kept = [
-                (candidate.similarity, candidate.id, candidate.confidence)
+                (_score(candidate), candidate.id, candidate.confidence)
                 for candidate in alike
-                if candidate.similarity >= max(floor, best - RECALL_MARGIN)
+                if candidate.similarity >= max(floor, most_alike - RECALL_MARGIN)
+                or candidate.identifier >= IDENTIFIER_ADMIT
             ]
         chosen = sorted(kept, key=lambda scored: relevance(scored[0], scored[2]), reverse=True)[:most]
         if not chosen:
@@ -619,11 +644,20 @@ class MemoryService:
         order: RankOrder,
         keep_top: int,
         keep_above: float | None = None,
+        texts: Sequence[str] | None = None,
     ) -> list[RankedCandidate]:
+        """Rank on the deployment's ranker, with the lexical lane over ``texts`` where the deployment runs it."""
+        lexical = [text[-QUERY_MAX_CHARS:] for text in texts] if texts and self._config.memory_lexical_search else None
         try:
             with timed("rank"):
                 return await self._ranking.rank(
-                    workspace_id, candidates, queries, order=order, keep_top=keep_top, keep_above=keep_above
+                    workspace_id,
+                    candidates,
+                    queries,
+                    order=order,
+                    keep_top=keep_top,
+                    keep_above=keep_above,
+                    texts=lexical,
                 )
         except MemoryRankingError as exc:
             logger.warning("Memory could not rank what a member may recall: %s", exc)
@@ -640,14 +674,22 @@ class MemoryService:
         order: RankOrder,
         keep_top: int,
         keep_above: float | None = None,
+        texts: Sequence[str] | None = None,
     ) -> list[RankedCandidate]:
         """Rank in this process, whatever ranker the service was given: the memory service's side of the port.
 
         Only the workspace's own entries are opened, under its row-level security; an id it does not hold is left
-        out. Which of them a member may recall was decided by the gateway that sent them.
+        out. Which of them a member may recall was decided by the gateway that sent them. ``texts`` run the lexical
+        lane, unless this deployment has it off.
         """
         return await self._local_ranking.rank(
-            workspace_id, candidates, queries, order=order, keep_top=keep_top, keep_above=keep_above
+            workspace_id,
+            candidates,
+            queries,
+            order=order,
+            keep_top=keep_top,
+            keep_above=keep_above,
+            texts=texts if self._config.memory_lexical_search else None,
         )
 
     async def forget_here(self, workspace_id: uuid.UUID) -> None:
@@ -1267,6 +1309,11 @@ def guarded_decision(decision: Decision, alike: Sequence[float]) -> Decision:
         if alike[decision.target] < REPLACE_FLOOR:
             return Decision("add")
     return decision
+
+
+def _score(ranked: RankedCandidate) -> float:
+    """What a ranked entry is ordered and reported by: its fused score where the lexical lane ran, else similarity."""
+    return ranked.score if ranked.score is not None else ranked.similarity
 
 
 def _require_write(caller: MemoryCaller) -> None:

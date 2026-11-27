@@ -139,7 +139,11 @@ Use it as background where it helps answer; you may say it comes from the team's
   as alike as the better of the message alone and the message read after those
   two, so a question that changes the subject is not held to the old one.
 - What it adds is what fits the question best: an entry more than 0.1 below the
-  most alike one is left out, such as one that shares only a name with it.
+  most alike one is left out, such as one that shares only a word with it.
+- An entry that names what the message names, written as code would
+  (`deploy_api.sh`, `MemoryService`, `OTARI-1234`), is added however unlike its
+  embedding is, unless many entries name it too. See
+  [How memory ranks](#how-memory-ranks).
 - It costs one embedding call per message, and adds a few hundred tokens only where
   something is found. A turn that hands back tool results is not searched, so a
   client's own agent loop is searched once per question, not once per step.
@@ -164,8 +168,9 @@ its model directly and reaches memory as an MCP server searches with
 Similarity says what an entry is about, not whether it answers what is asked:
 an entry about a colleague's hobbies can be alike to a question about a meeting
 with that colleague, since both name them. With **Check relevance** on, the
-deployment's rerank model (`memory_rerank_model`) scores the ten entries most
-alike to the message, and only those reaching **How relevant an entry must be**
+deployment's rerank model (`memory_rerank_model`) scores the ten entries that
+rank best for the message (by the fused score of
+[How memory ranks](#how-memory-ranks)), and only those reaching **How relevant an entry must be**
 (0.05 to 0.99, 0.8 by default) are added, whatever their similarity. The score
 is the rerank model's own: 0.8 suits `qwen3-reranker`, and another model may
 need another.
@@ -190,8 +195,76 @@ need another.
 
 How long each step of a recall takes is in the
 `gateway_memory_recall_stage_seconds` histogram, by stage: `embed`, `list`,
-`rank` (with `open` and `score`, wherever ranking runs), `rerank` and
+`rank` (with `open`, `lexical` and `score`, wherever ranking runs), `rerank` and
 `hand_over`.
+
+### How memory ranks
+
+Automatic recall and `memory_search` rank by two lanes and fuse them.
+
+- **Similarity**: the cosine of each entry's embedding with the message's, as
+  before. It finds what an entry is about, and misses an exact name: an
+  embedding model reads `svc_ledger_rotation` as a few common pieces.
+- **Words**: [BM25](https://en.wikipedia.org/wiki/Okapi_BM25) (k1 1.2, b 0.75)
+  over each entry's words. A code name counts twice, split into its words
+  (`deploy_api` is `deploy` and `api`, `getUserById` is `get`, `user` and `id`)
+  and whole, so an entry naming it outranks one that only uses its words.
+  How common a word is, and the entries' mean length, are counted over the
+  entries the member may recall, nothing else.
+
+The two lanes' ranks are fused by
+[Reciprocal Rank Fusion](https://dl.acm.org/doi/10.1145/1571941.1572114), and
+an entry sharing a name with the message gains a boost:
+
+```
+fused = 1/(60 + rank by similarity) + 1/(60 + rank by words) + boost / 61
+boost = min(1, sum of w(name) over the names both write)
+w(name) = 1 / (1 + 0.5 (n - 1)^2), n = the entries that write the name
+score = fused / (3/61)     (0 to 1)
+```
+
+- A name is what is written as code would be: snake_case, camelCase,
+  kebab-case, a dotted name, a path (and its last part), a ticket such as
+  `OTARI-1234`, a version, `#123`; at least four characters, case ignored.
+- The weight `w` is the popularity penalty: a name one entry writes weighs 1,
+  two 0.67, three 0.33, five 0.11, ten 0.02. A name every entry repeats, such
+  as the repository's own, stops telling entries apart.
+- A full boost is worth what first place in a third lane would be, so a rare
+  name decides between entries that are otherwise close, and never alone
+  outweighs both lanes.
+- `memory_search` orders by `score` times confidence, and reports that as an
+  entry's `relevance`.
+- Automatic recall still decides **what** is added as before, and orders it by
+  `score`: an entry clears **How alike an entry must be** (similarity) and is
+  within 0.1 of the most alike one, or it shares names with the message
+  weighing 0.5 or more (one name at most two entries write, or several rarer
+  ones). With **Check relevance** on, the rerank model's score decides, over the
+  ten entries ranking best by `score`. Both thresholds are on the same scales
+  as before; the fused score sets no threshold of its own, as a rank says how
+  an entry compares with the others, not how alike it is.
+- Each process that ranks reads the candidates' texts to count their words,
+  once, and holds the counts beside the embeddings (see
+  [Data protection](#data-protection)). A cold workspace of 5,000 entries of
+  250 characters takes about 0.1 seconds to count and 7 MB to hold; at the
+  2,000-character limit, 0.6 seconds and 44 MB. Scoring a message then takes
+  under 15 milliseconds.
+- Where the words lane fails, or takes over a second, the message is ranked by
+  similarity alone, as it was before the lane existed, and
+  `gateway_memory_lexical_fallbacks_total` counts it. Counts made past the
+  second are still kept for the next message. `memory_lexical_search: false`
+  turns the lane off.
+
+Why counts in each process and not an index in the database: entry text is
+sealed, so PostgreSQL cannot index it. The alternative, a "blind index" of
+each word keyed with a workspace secret, would let the database match words it
+cannot read, but it would show anyone who reads the database which entries
+share a word and how often each word occurs, which frequency analysis turns
+back into the common words; it would need a secret that outlives the data
+keys, which rotate every 30 days, and a row per word of every entry. Counting
+in the process that already opens a workspace's embeddings reveals nothing new
+to the database, costs a few megabytes per workspace, and needs no migration.
+Each replica counts on its own, as it opens embeddings on its own; entries are
+never changed in place, so replicas never disagree on an entry's words.
 
 ## Measure what memory saves
 
@@ -229,7 +302,7 @@ The same report is `GET /api/v1/workspaces/{workspace_id}/memory/experiment`.
 
 | Tool | What it does |
 | --- | --- |
-| `memory_search` | The entries that best match a query, each with its kind, scope, trust level, confidence and age. |
+| `memory_search` | The entries that best match a query, by meaning and by the names it writes, each with its kind, scope, trust level, confidence and age. It narrows by `kind` and by when an entry was recorded (`since`, `until`). |
 | `memory_get` | One entry, with the versions it replaced. |
 | `memory_propose` | Offers one fact, decision or procedure. It is a proposal until the consolidator decides on it. |
 | `memory_confirm` | Says an entry held up in use, which raises its confidence. Only an entry's current version takes it. |
@@ -238,6 +311,19 @@ The same report is `GET /api/v1/workspaces/{workspace_id}/memory/experiment`.
 
 A workspace viewer can search and read, and changes nothing. An entry in the
 member scope is its owner's alone: no other member, and no admin, recalls it.
+
+`memory_search` takes, besides `query` and `limit` (1 to 10, 5 by default):
+
+| Argument | What it keeps |
+| --- | --- |
+| `kind` | Entries of one kind (`"fact"`), or of several (`["fact", "decision"]`). |
+| `since` | Entries recorded at or after this time: ISO 8601, a date alone (`2026-01-31`) being its midnight, and a time without a zone read as UTC. |
+| `until` | Entries recorded at or before this time, read as `since` is. |
+
+A filter narrows what is listed before it is ranked, so a search still returns
+up to `limit` of what is left. An entry is recorded when its version is: an
+updated entry counts from its update. `since` after `until`, an unknown kind or
+any other argument is refused, and the agent is told which.
 
 ## How a proposal becomes memory
 
@@ -354,7 +440,8 @@ errs often, and while the guard keeps most of its errors from losing anything,
 what it marks as a conflict waits for an admin. The embedding model was
 `nomic-embed-text`.
 
-Search ranks entries by their similarity to the query times their confidence.
+Search ranks entries by their fused score (see
+[How memory ranks](#how-memory-ranks)) times their confidence.
 Confidence starts at 0.5, rises by 0.1 for each member who confirms an entry
 and falls by 0.15 for each who flags it, the rules of
 [cq](https://github.com/mozilla-ai/cq). A member counts once per entry, and an
@@ -379,13 +466,15 @@ entry three members flag leaves recall until an admin looks at it.
   author of the shared ones. Deleting a workspace deletes its memory.
 - **Opened in a process.** Each gateway process holds the workspace data keys it
   opened, and, with `memory_recall_cache` on (the default), the entry embeddings
-  automatic recall opened, so a turn opens only those it has not yet. An
-  embedding is held for ten minutes from when it was opened, however often it is
-  used, and never an entry's text. Which entries a member may recall is read from
+  recall opened, so a turn opens only those it has not yet. With
+  `memory_lexical_search` on (the default), it holds beside them each entry's
+  words and how often each occurs: never the text in order, but most of what it
+  says, so treat it as the text. Both are held for ten minutes from when they
+  were opened, however often they are used, under one cap. Which entries a member may recall is read from
   the database on every turn, so an entry retired, flagged or deleted is never
   handed over from what is held. Erasing a workspace drops what the process that
-  erased it holds; other processes hold its embeddings until they expire, and
-  hand over none of them. Off, every entry is opened on every turn: plaintext
+  erased it holds; other processes hold its embeddings and words until they
+  expire, and hand over none of them. Off, every entry is opened on every turn: plaintext
   lives no longer than a request. With a
   [memory service](#run-memory-as-its-own-service), the service holds them and
   the gateway none.
@@ -425,9 +514,13 @@ master key opens it. Keep its port on the deployment's private network.
 
 - **The gateway still decides what is recalled.** It lists, from the database
   and under row-level security, which entries the member may recall, and sends
-  their ids, their confidence and the turn's embedding. The service opens those
-  embeddings, holds them, ranks, and answers with ids and scores. No entry's
-  text crosses; the gateway opens the few it hands over.
+  their ids, their confidence, the turn's embedding and the turn's own words.
+  The service opens those embeddings and the entries' texts, holds the
+  embeddings and the words' counts, ranks, and answers with ids and scores. No
+  entry's text crosses; the gateway opens the few it hands over.
+- **Upgrade the service first.** A gateway that ranks by words sends a field an
+  older service refuses; it then asks again without it, and that turn is
+  ranked by similarity alone.
 - **The service runs the consolidator**, and a gateway with
   `memory_service_url` does not.
 - **When the service is down or slower than two seconds**, automatic recall goes
@@ -444,7 +537,8 @@ master key opens it. Keep its port on the deployment's private network.
 | `memory_embedding_model` | unset | The one model every entry and search is embedded with. |
 | `memory_consolidation_model` | unset | The model that decides what a proposal does to memory. |
 | `memory_rerank_model` | unset | The rerank model automatic recall checks relevance with, where a workspace turns the check on. |
-| `memory_recall_cache` | `true` | Hold the embeddings automatic recall opens, ten minutes each, in each process. See [Data protection](#data-protection). |
+| `memory_recall_cache` | `true` | Hold the embeddings recall opens, and each entry's word counts, ten minutes each, in each process. See [Data protection](#data-protection). |
+| `memory_lexical_search` | `true` | Rank by words and names as well as by similarity. See [How memory ranks](#how-memory-ranks). Off, nothing but embeddings is opened to rank. |
 | `memory_service_url` | unset | The [memory service](#run-memory-as-its-own-service) a gateway hands ranking and consolidation to. Unset, the gateway does both. |
 | `memory_service_token` | unset | The secret a gateway shows the memory service, set on both. |
 | `memory_max_entries_per_workspace` | `5000` | Active entries one workspace holds; past it, the least used is retired. |

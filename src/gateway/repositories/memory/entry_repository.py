@@ -54,6 +54,17 @@ class SealedEmbedding:
     embedding_sealed: str
 
 
+@dataclass(frozen=True)
+class SealedContent:
+    """An entry's sealed text, with what opening it is bound to."""
+
+    id: uuid.UUID
+    scope: MemoryScope
+    owner_user_id: uuid.UUID | None
+    key_id: uuid.UUID
+    content_sealed: str
+
+
 class EntryRepository(FencedRepository[MemoryEntry]):
     """Store entry versions, and find the ones a caller may recall."""
 
@@ -107,18 +118,28 @@ class EntryRepository(FencedRepository[MemoryEntry]):
         include_workspace: bool,
         include_external: bool,
         embedding_model: str,
+        kinds: Collection[MemoryKind] | None = None,
+        created_from: datetime | None = None,
+        created_until: datetime | None = None,
     ) -> list[RecallableRef]:
-        """The entries :meth:`recallable` returns that ``embedding_model`` embedded, by id and confidence alone."""
+        """The entries :meth:`recallable` returns that ``embedding_model`` embedded, by id and confidence alone.
+
+        ``kinds`` keeps only those of these kinds, and ``created_from``/``created_until`` only versions created in
+        that window, both ends included.
+        """
         await self._fence(workspace_id)
-        result = await self.db.execute(
-            select(MemoryEntry.id, MemoryEntry.confidence)
-            .where(
-                _recallable(workspace_id, member_id, include_workspace, include_external),
-                MemoryEntry.embedding_model == embedding_model,
-                MemoryEntry.embedding_sealed.is_not(None),
-            )
-            .order_by(MemoryEntry.created_at, MemoryEntry.id)
+        query = select(MemoryEntry.id, MemoryEntry.confidence).where(
+            _recallable(workspace_id, member_id, include_workspace, include_external),
+            MemoryEntry.embedding_model == embedding_model,
+            MemoryEntry.embedding_sealed.is_not(None),
         )
+        if kinds is not None:
+            query = query.where(MemoryEntry.kind.in_(list(kinds)))
+        if created_from is not None:
+            query = query.where(MemoryEntry.created_at >= created_from)
+        if created_until is not None:
+            query = query.where(MemoryEntry.created_at <= created_until)
+        result = await self.db.execute(query.order_by(MemoryEntry.created_at, MemoryEntry.id))
         return [RecallableRef(entry_id, confidence) for entry_id, confidence in result.all()]
 
     async def sealed_embeddings(
@@ -145,6 +166,25 @@ class EntryRepository(FencedRepository[MemoryEntry]):
             SealedEmbedding(entry_id, scope, owner_user_id, key_id, sealed)
             for entry_id, scope, owner_user_id, key_id, sealed in result.all()
             if sealed is not None
+        ]
+
+    async def sealed_contents(self, workspace_id: uuid.UUID, entry_ids: Collection[uuid.UUID]) -> list[SealedContent]:
+        """The sealed texts of these entries of the workspace; an id it does not hold is left out."""
+        await self._fence(workspace_id)
+        if not entry_ids:
+            return []
+        result = await self.db.execute(
+            select(
+                MemoryEntry.id,
+                MemoryEntry.scope,
+                MemoryEntry.owner_user_id,
+                MemoryEntry.key_id,
+                MemoryEntry.content_sealed,
+            ).where(MemoryEntry.workspace_id == workspace_id, MemoryEntry.id.in_(entry_ids))
+        )
+        return [
+            SealedContent(entry_id, scope, owner_user_id, key_id, sealed)
+            for entry_id, scope, owner_user_id, key_id, sealed in result.all()
         ]
 
     async def many_in_workspace(

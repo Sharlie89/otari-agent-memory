@@ -6,10 +6,10 @@ names a workspace or a member: those come from the caller's key.
 """
 
 import uuid
-from datetime import datetime
-from typing import Annotated, Literal
+from datetime import UTC, datetime
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from gateway.models.memory import (
     MemoryKind,
@@ -30,8 +30,40 @@ class _Arguments(BaseModel):
 
 
 class SearchArguments(_Arguments):
-    query: str = Field(min_length=1, max_length=QUERY_MAX_LENGTH, description="What to look for, in plain words.")
+    query: str = Field(
+        min_length=1,
+        max_length=QUERY_MAX_LENGTH,
+        description="What to look for, in plain words. Exact names (a function, a file path, a ticket) match as "
+        "written.",
+    )
     limit: int = Field(default=5, ge=1, le=10, description="Most results to return.")
+    kind: MemoryKind | Annotated[list[MemoryKind], Field(min_length=1, max_length=3)] | None = Field(
+        default=None, description="Only entries of this kind, or of these kinds: fact, decision, procedure."
+    )
+    since: datetime | None = Field(
+        default=None,
+        description="Only entries recorded at or after this time, ISO 8601 (2026-01-31 or 2026-01-31T09:00:00Z); "
+        "without a zone, UTC. An updated entry counts from its update.",
+    )
+    until: datetime | None = Field(default=None, description="Only entries recorded at or before this time, as since.")
+
+    @field_validator("since", "until")
+    @classmethod
+    def _in_utc(cls, value: datetime | None) -> datetime | None:
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+    @model_validator(mode="after")
+    def _window_in_order(self) -> Self:
+        if self.since is not None and self.until is not None and self.since > self.until:
+            raise ValueError("since must not be after until")
+        return self
+
+    @property
+    def kinds(self) -> list[MemoryKind] | None:
+        """The kinds asked for, as a list; None for every kind."""
+        if self.kind is None:
+            return None
+        return list(dict.fromkeys(self.kind)) if isinstance(self.kind, list) else [self.kind]
 
 
 class EntryArguments(_Arguments):
@@ -286,10 +318,12 @@ class OrganizationMemoryUpdate(BaseModel):
 ENGINE_MAX_CANDIDATES = 100_000
 ENGINE_MAX_QUERIES = 4
 ENGINE_MAX_DIMENSIONS = 8_192
+# A gateway sends the lexical lane only the tail of a turn (``QUERY_MAX_CHARS``); this leaves that room.
+ENGINE_MAX_TEXT = 16_000
 
 
 class EngineRankRequest(BaseModel):
-    """A gateway's candidates, as ``[id, confidence]``, and the turn's vectors."""
+    """A gateway's candidates, as ``[id, confidence]``, the turn's vectors and, for the lexical lane, its words."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -301,12 +335,20 @@ class EngineRankRequest(BaseModel):
     order: Literal["similarity", "relevance"]
     keep_top: int = Field(ge=0, le=ENGINE_MAX_CANDIDATES)
     keep_above: float | None = None
+    texts: list[Annotated[str, Field(max_length=ENGINE_MAX_TEXT)]] | None = Field(
+        default=None, max_length=ENGINE_MAX_QUERIES
+    )
 
 
 class EngineRankResponse(BaseModel):
-    """The kept candidates best first, as ``[id, confidence, similarity]``."""
+    """The kept candidates best first, as ``[id, confidence, similarity]``.
 
-    ranked: list[tuple[uuid.UUID, float, float]]
+    Where the gateway sent ``texts``, each also carries its fused score (null where the lexical lane failed) and
+    its identifier weight: ``[id, confidence, similarity, score, identifier]``. A gateway that sent none gets the
+    three it reads.
+    """
+
+    ranked: list[tuple[uuid.UUID, float, float] | tuple[uuid.UUID, float, float, float | None, float]]
 
 
 class EngineForgetRequest(BaseModel):
