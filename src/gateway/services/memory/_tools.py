@@ -78,7 +78,10 @@ class MemoryTool:
 TOOLS: Final[tuple[MemoryTool, ...]] = (
     MemoryTool(
         "memory_search",
-        "Search what this workspace's agents and your own earlier sessions learned. Best match first.",
+        "Search what this workspace's agents and your own earlier sessions learned, by meaning and by exact names "
+        "(functions, paths, tickets). Best match first. Each result's relevance (0 to 1) ranks it against the other "
+        "results of the same search, so the top one always scores well: it says which matched best, not that it "
+        "matched. Narrow it by kind or by when an entry was recorded.",
         SearchArguments,
         {"readOnlyHint": True, "openWorldHint": False},
     ),
@@ -170,7 +173,9 @@ def _recalled(entry: OpenedEntry, relevance: float | None = None) -> RecalledEnt
 
 async def _search(service: MemoryService, caller: MemoryCaller, raw: dict[str, Any]) -> BaseModel | list[BaseModel]:
     args = SearchArguments.model_validate(raw)
-    found = await service.search(caller, args.query, limit=args.limit)
+    found = await service.search(
+        caller, args.query, limit=args.limit, kinds=args.kinds, since=args.since, until=args.until
+    )
     return [_recalled(recalled.entry, round(recalled.relevance, 4)) for recalled in found]
 
 
