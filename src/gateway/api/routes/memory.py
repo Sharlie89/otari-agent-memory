@@ -424,8 +424,13 @@ async def rank_for_gateway(body: EngineRankRequest, service: MemoryServiceDep) -
         order=body.order,
         keep_top=body.keep_top,
         keep_above=body.keep_above,
+        texts=body.texts,
     )
-    return EngineRankResponse(ranked=[(entry.id, entry.confidence, entry.similarity) for entry in ranked])
+    if body.texts is None:
+        return EngineRankResponse(ranked=[(entry.id, entry.confidence, entry.similarity) for entry in ranked])
+    return EngineRankResponse(
+        ranked=[(entry.id, entry.confidence, entry.similarity, entry.score, entry.identifier) for entry in ranked]
+    )
 
 
 @engine_router.post("/forget")

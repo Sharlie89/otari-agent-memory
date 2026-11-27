@@ -119,6 +119,7 @@ _SETTING_NAMES = frozenset(
         "memory_forgotten_member_similarity",
         "memory_forgotten_similarity",
         "memory_key_rotation_days",
+        "memory_lexical_search",
         "memory_max_entries_per_workspace",
         "memory_proposal_max_age_hours",
         "memory_read_retention_days",

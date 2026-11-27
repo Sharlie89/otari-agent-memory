@@ -6,7 +6,7 @@ failing the read, and counted.
 """
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -341,11 +341,14 @@ class EntryStore:
         include_workspace: bool,
         include_external: bool,
         embedding_model: str,
+        kinds: Collection[MemoryKind] | None = None,
+        created_from: datetime | None = None,
+        created_until: datetime | None = None,
     ) -> list[RankCandidate]:
         """Each active entry ``member_id`` may recall that ``embedding_model`` embedded, by id and confidence.
 
         Listed from the database every time, under its row-level security: what decides what a member may recall
-        is never what a ranker holds.
+        is never what a ranker holds. ``kinds`` and the creation window narrow it, never widen it.
         """
         refs = await self._repos.entries.recallable_refs(
             workspace_id,
@@ -353,6 +356,9 @@ class EntryStore:
             include_workspace=include_workspace,
             include_external=include_external,
             embedding_model=embedding_model,
+            kinds=kinds,
+            created_from=created_from,
+            created_until=created_until,
         )
         return [RankCandidate(ref.id, ref.confidence) for ref in refs]
 
@@ -381,6 +387,32 @@ class EntryStore:
                     raise SealedValueError("its key is gone")
                 opened[row.id] = unpack_embedding_array(open_sealed(key, row.embedding_sealed, aad))
             except SealedValueError:
+                UNOPENED_ROWS.labels(table="memory_entries").inc()
+        return opened
+
+    async def open_texts(self, workspace_id: uuid.UUID, entry_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, str]:
+        """These entries' texts, opened, by id, for the lexical lane to index; nothing else of them is read.
+
+        An id the workspace does not hold, or whose text does not open, is left out.
+        """
+        rows = await self._repos.entries.sealed_contents(workspace_id, entry_ids)
+        keys = await self._keys.for_opening(self._repos.keys, workspace_id, {row.key_id for row in rows})
+        opened: dict[uuid.UUID, str] = {}
+        for row in rows:
+            key = keys.get(row.key_id)
+            aad = associated_data(
+                workspace_id=workspace_id,
+                scope=row.scope,
+                owner_user_id=row.owner_user_id,
+                record="entry",
+                record_id=row.id,
+                field="content",
+            )
+            try:
+                if key is None:
+                    raise SealedValueError("its key is gone")
+                opened[row.id] = open_sealed(key, row.content_sealed, aad).decode()
+            except (SealedValueError, UnicodeDecodeError):
                 UNOPENED_ROWS.labels(table="memory_entries").inc()
         return opened
 

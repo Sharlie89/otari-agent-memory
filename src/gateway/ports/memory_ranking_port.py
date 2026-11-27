@@ -8,8 +8,9 @@ memory cannot slow the requests the gateway serves.
 
 The caller always decides which entries are candidates, from the database and
 under its row-level security, and passes them by id. A ranker only orders what
-it is handed: it never widens what a member may recall. Embeddings and texts
-never cross this port, only ids, confidences and the turn's own vectors.
+it is handed: it never widens what a member may recall. Stored embeddings and
+texts never cross this port, only ids, confidences, and the turn's own vectors
+and, for the lexical lane, its own words.
 
 Failures cross as :class:`MemoryRankingError`. A caller serves the request
 without memory rather than fail it.
@@ -37,11 +38,17 @@ class RankCandidate:
 
 @dataclass(frozen=True)
 class RankedCandidate:
-    """A candidate with how alike its embedding is to the turn: the best of the turn's vectors."""
+    """A candidate with how alike its embedding is to the turn: the best of the turn's vectors.
+
+    Where the lexical lane ran, ``score`` is the fused score, 0 to 1, and ``identifier`` the weight of the
+    identifiers it shares with the turn, 0 to 1; ``score`` is None where only similarity ranked.
+    """
 
     id: uuid.UUID
     confidence: float
     similarity: float
+    score: float | None = None
+    identifier: float = 0.0
 
 
 class MemoryRankingPort(Protocol):
@@ -56,11 +63,16 @@ class MemoryRankingPort(Protocol):
         order: RankOrder,
         keep_top: int,
         keep_above: float | None = None,
+        texts: Sequence[str] | None = None,
     ) -> list[RankedCandidate]:
         """The candidates best first by ``order``: the first ``keep_top``, and any other alike at least ``keep_above``.
 
         ``similarity`` orders by the best cosine similarity to any of ``queries``; ``relevance`` by that similarity
         weighed by the candidate's confidence. A candidate whose embedding does not open is left out.
+
+        ``texts`` are the turn's words, in the order of ``queries``; given, the lexical lane runs beside similarity,
+        both order by the fused score instead (``relevance`` weighed by confidence), and a candidate sharing
+        identifiers enough with the turn is kept too. Where the lexical lane fails, ranking goes by similarity.
 
         Raises:
             MemoryRankingError: the ranker could not answer.

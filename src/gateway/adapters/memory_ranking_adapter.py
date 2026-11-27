@@ -1,8 +1,9 @@
 """Recall's ranking handed to a memory service the deployment runs apart: ``otari memory-service``.
 
 The gateway sends the candidates it read from the database, by id and confidence,
-and the turn's vectors; the service opens their embeddings, holds them, ranks,
-and answers with ids and scores. No text and no stored embedding crosses.
+the turn's vectors and, for the lexical lane, the turn's own words; the service
+opens their embeddings and texts, holds them, ranks, and answers with ids and
+scores. No entry's text and no stored embedding crosses.
 
 Every call carries ``memory_service_token``. One client per process, so calls
 share its connections. A call that does not answer within ``timeout`` fails as
@@ -60,10 +61,11 @@ class HttpMemoryRanking(MemoryRankingPort):
         order: RankOrder,
         keep_top: int,
         keep_above: float | None = None,
+        texts: Sequence[str] | None = None,
     ) -> list[RankedCandidate]:
         if not candidates or not queries:
             return []
-        body = {
+        body: dict[str, Any] = {
             "workspace_id": str(workspace_id),
             "candidates": [[str(candidate.id), candidate.confidence] for candidate in candidates],
             "queries": [list(query) for query in queries],
@@ -71,12 +73,14 @@ class HttpMemoryRanking(MemoryRankingPort):
             "keep_top": keep_top,
             "keep_above": keep_above,
         }
-        answer = await self._post(RANK_PATH, body)
+        answer = await self._post(RANK_PATH, {**body, "texts": list(texts)}, refusable=True) if texts else None
+        if answer is None:
+            if texts:
+                # A service older than the lexical lane refuses the field it does not know: rank by similarity.
+                logger.warning("The memory service does not rank lexically yet; it ranks by similarity alone")
+            answer = await self._post(RANK_PATH, body)
         try:
-            return [
-                RankedCandidate(uuid.UUID(entry_id), float(confidence), float(similarity))
-                for entry_id, confidence, similarity in answer["ranked"]
-            ]
+            return [_ranked(row) for row in answer["ranked"]]
         except (KeyError, TypeError, ValueError) as exc:
             msg = "the memory service answered in a shape this gateway does not read"
             raise MemoryRankingError(msg) from exc
@@ -91,7 +95,8 @@ class HttpMemoryRanking(MemoryRankingPort):
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    async def _post(self, path: str, body: dict[str, Any]) -> Any:
+    async def _post(self, path: str, body: dict[str, Any], *, refusable: bool = False) -> Any:
+        """The service's JSON answer; None where ``refusable`` and it refused the body's shape (422)."""
         try:
             response = await self._client.post(path, json=body)
         except httpx.TimeoutException as exc:
@@ -100,6 +105,8 @@ class HttpMemoryRanking(MemoryRankingPort):
         except httpx.HTTPError as exc:
             msg = f"the memory service could not be reached ({type(exc).__name__})"
             raise MemoryRankingError(msg) from exc
+        if refusable and response.status_code == httpx.codes.UNPROCESSABLE_ENTITY:
+            return None
         if response.status_code != httpx.codes.OK:
             msg = f"the memory service answered {response.status_code}"
             raise MemoryRankingError(msg)
@@ -108,3 +115,18 @@ class HttpMemoryRanking(MemoryRankingPort):
         except ValueError as exc:
             msg = "the memory service answered with something other than JSON"
             raise MemoryRankingError(msg) from exc
+
+
+def _ranked(row: Sequence[Any]) -> RankedCandidate:
+    """One ``[id, confidence, similarity]``, with ``score`` and ``identifier`` after where the lexical lane ran."""
+    entry_id, confidence, similarity, *lexical = row
+    if not lexical:
+        return RankedCandidate(uuid.UUID(entry_id), float(confidence), float(similarity))
+    fused, identifier = lexical
+    return RankedCandidate(
+        uuid.UUID(entry_id),
+        float(confidence),
+        float(similarity),
+        score=float(fused) if fused is not None else None,
+        identifier=float(identifier),
+    )

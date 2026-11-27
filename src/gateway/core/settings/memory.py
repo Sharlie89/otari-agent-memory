@@ -43,10 +43,20 @@ class MemorySettings(BaseModel):
     memory_recall_cache: Annotated[bool, OMITTED] = Field(
         default=True,
         description=(
-            "Hold the entry embeddings automatic recall opens in each gateway process for up to ten minutes, so a "
-            "turn opens only those it has not opened yet. Embeddings only, never text, and which entries a member "
-            "may recall is read from the database every turn. Off opens every entry on every turn: plaintext lives "
-            "no longer than a request, and erasing a workspace leaves nothing opened in any process."
+            "Hold the entry embeddings recall opens in each gateway process for up to ten minutes, so a turn opens "
+            "only those it has not opened yet, and, with memory_lexical_search, each entry's words beside them. Never "
+            "an entry's text, and which entries a member may recall is read from the database every turn. Off opens "
+            "every entry on every turn: plaintext lives no longer than a request, and erasing a workspace leaves "
+            "nothing opened in any process."
+        ),
+    )
+    memory_lexical_search: Annotated[bool, OMITTED] = Field(
+        default=True,
+        description=(
+            "Rank recall and memory_search by words and identifiers as well as by embedding similarity, so an exact "
+            "name (a function, a file path, a ticket) is found. Each process that ranks opens the candidates' texts "
+            "to index their words, and holds those words beside the embeddings, under memory_recall_cache's bounds. "
+            "Off ranks by similarity alone and opens only the texts it hands over."
         ),
     )
     memory_service_url: Annotated[str | None, OMITTED] = Field(
