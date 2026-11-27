@@ -16,6 +16,7 @@ from gateway.core.database import DATABASE_ERRORS, describe_database_error
 from gateway.core.unit_of_work import UnitOfWork
 from gateway.exceptions.memory_exceptions import (
     MemoryApprovalRefusedError,
+    MemoryEntryNotCurrentError,
     MemoryEntryNotFoundError,
     MemoryModelUnavailableError,
     MemoryOffError,
@@ -84,6 +85,8 @@ from gateway.services.memory._timing import RERANK_SKIPPED, timed
 
 SEARCH_LIMIT_MAX = 10
 HISTORY_LIMIT = 20
+# The statuses a confirm or flag may move: a quarantined entry comes back once its flags are outweighed.
+_SIGNALLED_STATUSES: frozenset[MemoryStatus] = frozenset({"active", "quarantined"})
 # Entries a proposal is compared with, and how alike one must be to count.
 NEIGHBOURS = 5
 COMPARE_FLOOR = 0.75
@@ -461,6 +464,7 @@ class MemoryService:
         Raises:
             MemoryOffError: the workspace has not turned memory on.
             MemoryEntryNotFoundError: the caller may recall no entry by that id.
+            MemoryEntryNotCurrentError: the entry is an earlier version or has been retired.
         """
         return await self._signal(caller, entry_id, "confirm", None)
 
@@ -470,6 +474,7 @@ class MemoryService:
         Raises:
             MemoryOffError: the workspace has not turned memory on.
             MemoryEntryNotFoundError: the caller may recall no entry by that id.
+            MemoryEntryNotCurrentError: the entry is an earlier version or has been retired.
         """
         return await self._signal(caller, entry_id, "flag", reason)
 
@@ -1207,6 +1212,9 @@ class MemoryService:
         async with self._uow:
             switches = await self._switches(caller.workspace_id)
             entry = await self._visible_entry(caller, switches, entry_id)
+            # Recall no longer serves a superseded or retired version, and recomputing its status would.
+            if entry.status not in _SIGNALLED_STATUSES:
+                raise MemoryEntryNotCurrentError
             await self._repos.signals.put(caller.workspace_id, entry.id, caller.member_id, signal=signal, reason=reason)
             confirmations, flags = await self._repos.signals.counts(caller.workspace_id, entry.id)
             status: MemoryStatus = "quarantined" if flags >= QUARANTINE_FLAGS else "active"

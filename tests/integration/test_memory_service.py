@@ -18,6 +18,7 @@ from gateway.core.config import GatewayConfig
 from gateway.core.database import dispose_db, init_db
 from gateway.core.unit_of_work import create_unit_of_work
 from gateway.exceptions.memory_exceptions import (
+    MemoryEntryNotCurrentError,
     MemoryEntryNotFoundError,
     MemoryModelUnavailableError,
     MemoryOffError,
@@ -408,6 +409,32 @@ async def test_each_member_counts_once_and_enough_flags_take_an_entry_out_of_rec
 
     assert receipt.status == "quarantined"
     assert await memory().search(tenants.bob, DEPLOY, limit=5) == []
+
+
+@pytest.mark.parametrize("signal", ["confirm", "flag"])
+async def test_a_signal_on_a_replaced_version_does_not_bring_it_back(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession, signal: str
+) -> None:
+    """``memory_get`` hands out the ids of the versions an entry replaced; signalling one must not revive it."""
+    old = await _learn(memory, tenants.alice, DEPLOY)
+    memory.models.decisions = [Decision("update", 0)]
+    await memory().propose(tenants.alice, text=DEPLOY + " now", kind="procedure", scope="workspace", external=False)
+    await memory().consolidate(tenants.workspace, limit=20)
+    retired = await _learn(memory, tenants.alice, "Rotate the staging keys every Monday")
+    await async_db.execute(update(MemoryEntry).where(MemoryEntry.id == retired).values(status="retired"))
+    await async_db.commit()
+
+    for entry in (old, retired):
+        with pytest.raises(MemoryEntryNotCurrentError):
+            if signal == "confirm":
+                await memory().confirm(tenants.bob, entry)
+            else:
+                await memory().flag(tenants.bob, entry, "stale")
+
+    statuses = dict((await async_db.execute(select(MemoryEntry.id, MemoryEntry.status))).tuples().all())
+    assert statuses[old] == "superseded"
+    assert statuses[retired] == "retired"
+    assert [r.entry.text for r in await memory().search(tenants.bob, DEPLOY, limit=5)] == [DEPLOY + " now"]
 
 
 async def test_a_more_trusted_entry_ranks_first(memory: Memory, tenants: Tenants) -> None:

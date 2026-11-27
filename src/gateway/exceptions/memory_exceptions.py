@@ -2,7 +2,13 @@
 
 from fastapi import status
 
-from gateway.exceptions import TenancyError, TenancyForbiddenError, TenancyNotFoundError, TenancyValidationError
+from gateway.exceptions import (
+    TenancyConflictError,
+    TenancyError,
+    TenancyForbiddenError,
+    TenancyNotFoundError,
+    TenancyValidationError,
+)
 
 SEALING_UNAVAILABLE = "Memory can't store anything right now. Try again later."
 MODEL_UNAVAILABLE = "Memory can't search or store right now. Try again later."
@@ -12,6 +18,10 @@ MEMORY_OFF = (
 )
 WORKSPACE_SCOPE_OFF = "Shared workspace memory is off for this workspace. Use the member scope instead."
 ENTRY_NOT_FOUND = "No memory entry with that id."
+ENTRY_NOT_CURRENT = (
+    "That entry is an earlier version or has been retired, so it cannot be confirmed or flagged. "
+    "Search memory for its current version."
+)
 PROPOSAL_NOT_FOUND = "No proposal waiting for review with that id."
 READ_ONLY = "Workspace viewers can search memory but not change it."
 NOT_A_MEMBER = "Memory is for workspace members, and this key names none of its workspace."
@@ -76,6 +86,13 @@ class MemoryEntryNotFoundError(TenancyNotFoundError):
 
     def __init__(self) -> None:
         super().__init__(ENTRY_NOT_FOUND)
+
+
+class MemoryEntryNotCurrentError(TenancyConflictError):
+    """A signal on an entry version recall no longer serves, which would otherwise bring it back."""
+
+    def __init__(self) -> None:
+        super().__init__(ENTRY_NOT_CURRENT)
 
 
 class MemoryProposalNotFoundError(TenancyNotFoundError):
