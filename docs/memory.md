@@ -237,7 +237,9 @@ score = fused / (3/61)     (0 to 1)
   name decides between entries that are otherwise close, and never alone
   outweighs both lanes.
 - `memory_search` orders by `score` times confidence, and reports that as an
-  entry's `relevance`.
+  entry's `relevance`. It is relative to the other results of the same search,
+  so the best one always scores well; read it as an order, not as how alike an
+  entry is. Before this lane it was similarity times confidence.
 - Automatic recall still decides **what** is added as before, and orders it by
   `score`: an entry clears **How alike an entry must be** (similarity) and is
   within 0.1 of the most alike one, or it shares names with the message
@@ -257,6 +259,10 @@ score = fused / (3/61)     (0 to 1)
   `gateway_memory_lexical_fallbacks_total` counts it. Counts made past the
   second are still kept for the next message. `memory_lexical_search: false`
   turns the lane off.
+- The one-second budget for the words lane and the 0.5 weight that admits an
+  entry by its names are starting values, not yet measured on real workspaces.
+  `gateway_memory_lexical_fallbacks_total` and the `lexical` stage of
+  `gateway_memory_recall_stage_seconds` show whether the budget is right.
 
 Why counts in each process and not an index in the database: entry text is
 sealed, so PostgreSQL cannot index it. The alternative, a "blind index" of
