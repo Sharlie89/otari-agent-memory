@@ -54,6 +54,7 @@ class NewProposal:
     trust: MemoryTrust
     key_id: uuid.UUID
     content_sealed: str
+    observed_at: datetime
     source_api_key_id: str | None = None
     source_session_id: str | None = None
     source_model: str | None = None
@@ -79,6 +80,7 @@ class ProposalRepository(FencedRepository[MemoryProposal]):
             state="pending",
             key_id=proposal.key_id,
             content_sealed=proposal.content_sealed,
+            observed_at=proposal.observed_at,
             source_api_key_id=proposal.source_api_key_id,
             source_session_id=proposal.source_session_id,
             source_model=proposal.source_model,

@@ -1,4 +1,4 @@
-"""Entries and proposals written sealed and read back opened. Nothing here stores or returns text unsealed at rest.
+"""Entries, proposals and tombstones written sealed and read back opened. Nothing here stores them unsealed at rest.
 
 A row that does not open, because its key is gone from the key source or its
 value was moved onto another row, is left out of what is read rather than
@@ -24,7 +24,7 @@ from gateway.models.memory import (
     MemoryTrust,
 )
 from gateway.ports.memory_ranking_port import RankCandidate
-from gateway.repositories.memory import MemoryRepositories, NewEntry, NewProposal, parse_review_reason
+from gateway.repositories.memory import MemoryRepositories, NewEntry, NewProposal, NewTombstone, parse_review_reason
 from gateway.services.memory._keys import WorkspaceKeys
 from gateway.services.memory._sealing import (
     SealedField,
@@ -69,13 +69,14 @@ class EntryDraft:
     embedding_model: str | None
     confidence: float
     provenance: Provenance
+    observed_at: datetime
     version: int = 1
     supersedes_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
 class ProposalDraft:
-    """What an agent offered, in the clear, before it is sealed."""
+    """What an agent offered, in the clear, before it is sealed, and when."""
 
     workspace_id: uuid.UUID
     scope: MemoryScope
@@ -84,6 +85,7 @@ class ProposalDraft:
     trust: MemoryTrust
     text: str
     provenance: Provenance
+    observed_at: datetime
 
 
 @dataclass(frozen=True)
@@ -103,6 +105,7 @@ class OpenedProposal:
     text: str
     provenance: Provenance
     created_at: datetime
+    observed_at: datetime
     review_reason: MemoryReviewReason | None = None
     review_entry_id: uuid.UUID | None = None
 
@@ -127,6 +130,16 @@ class OpenedEntry:
     flags: int
     supersedes_id: uuid.UUID | None
     created_at: datetime
+    # When the evidence was observed: when an agent proposed it.
+    observed_at: datetime
+
+
+@dataclass(frozen=True)
+class OpenedTombstone:
+    """A live tombstone's embedding, opened for the consolidator to compare a proposal with."""
+
+    id: uuid.UUID
+    embedding: tuple[float, ...]
 
 
 class EntryStore:
@@ -175,6 +188,7 @@ class EntryStore:
                 embedding_sealed=embedding_sealed,
                 embedding_model=draft.embedding_model if draft.embedding is not None else None,
                 confidence=draft.confidence,
+                observed_at=draft.observed_at,
                 version=draft.version,
                 supersedes_id=draft.supersedes_id,
                 source_api_key_id=draft.provenance.api_key_id,
@@ -211,12 +225,91 @@ class EntryStore:
                 trust=draft.trust,
                 key_id=key.id,
                 content_sealed=seal(key.plaintext, draft.text.encode(), aad),
+                observed_at=draft.observed_at,
                 source_api_key_id=draft.provenance.api_key_id,
                 source_session_id=draft.provenance.session_id,
                 source_model=draft.provenance.model,
             )
         )
         return proposal_id
+
+    async def write_tombstones(
+        self, workspace_id: uuid.UUID, forgotten: Sequence[OpenedEntry], *, at: datetime, expires_at: datetime
+    ) -> int:
+        """Seal and stage a tombstone for each forgotten entry version that has an embedding; how many.
+
+        Only the embedding is kept, sealed afresh for the tombstone's own row, never the text.
+
+        Raises:
+            MemorySealingUnavailableError: no data key could be had, so nothing was staged.
+        """
+        embedded = [
+            (entry, entry.embedding, entry.embedding_model)
+            for entry in forgotten
+            if entry.embedding is not None and entry.embedding_model is not None
+        ]
+        if not embedded:
+            return 0
+        key = await self._keys.for_sealing(self._repos.keys, workspace_id)
+        tombstones: list[NewTombstone] = []
+        for entry, embedding, embedding_model in embedded:
+            tombstone_id = uuid.uuid4()
+            aad = associated_data(
+                workspace_id=workspace_id,
+                scope=entry.scope,
+                owner_user_id=entry.owner_user_id,
+                record="tombstone",
+                record_id=tombstone_id,
+                field="embedding",
+            )
+            tombstones.append(
+                NewTombstone(
+                    id=tombstone_id,
+                    workspace_id=workspace_id,
+                    scope=entry.scope,
+                    owner_user_id=entry.owner_user_id,
+                    key_id=key.id,
+                    embedding_sealed=seal(key.plaintext, pack_embedding(embedding), aad),
+                    embedding_model=embedding_model,
+                    forgotten_at=at,
+                    expires_at=expires_at,
+                )
+            )
+        await self._repos.tombstones.add_all(tombstones)
+        return len(tombstones)
+
+    async def live_tombstones(
+        self,
+        workspace_id: uuid.UUID,
+        *,
+        scope: MemoryScope,
+        owner_user_id: uuid.UUID | None,
+        embedding_model: str,
+        now: datetime,
+    ) -> list[OpenedTombstone]:
+        """The unexpired tombstones a proposal is compared with, opened; any that does not open is left out."""
+        rows = await self._repos.tombstones.live(
+            workspace_id, scope=scope, owner_user_id=owner_user_id, embedding_model=embedding_model, now=now
+        )
+        keys = await self._keys.for_opening(self._repos.keys, workspace_id, {row.key_id for row in rows})
+        opened: list[OpenedTombstone] = []
+        for row in rows:
+            key = keys.get(row.key_id)
+            aad = associated_data(
+                workspace_id=row.workspace_id,
+                scope=row.scope,
+                owner_user_id=row.owner_user_id,
+                record="tombstone",
+                record_id=row.id,
+                field="embedding",
+            )
+            try:
+                if key is None or row.workspace_id != workspace_id:
+                    raise SealedValueError("its key is gone")
+                opened.append(OpenedTombstone(row.id, unpack_embedding(open_sealed(key, row.embedding_sealed, aad))))
+            except SealedValueError:
+                UNOPENED_ROWS.labels(table="memory_tombstones").inc()
+        return opened
 
     async def recallable(
         self, workspace_id: uuid.UUID, *, member_id: uuid.UUID, include_workspace: bool, include_external: bool
@@ -395,6 +488,7 @@ def _open_entry(row: MemoryEntry, key: bytes) -> OpenedEntry | None:
         flags=row.flags,
         supersedes_id=row.supersedes_id,
         created_at=row.created_at,
+        observed_at=row.observed_at,
     )
 
 
@@ -427,6 +521,7 @@ def _open_proposal(row: MemoryProposal, key: bytes) -> OpenedProposal | None:
             model=row.source_model,
         ),
         created_at=row.created_at,
+        observed_at=row.observed_at,
         review_reason=reason,
         review_entry_id=entry_id,
     )

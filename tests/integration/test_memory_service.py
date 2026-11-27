@@ -5,7 +5,7 @@ import math
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -33,6 +33,8 @@ from gateway.models.memory import (
     MemoryOrganizationSettings,
     MemoryProposal,
     MemoryRead,
+    MemorySignal,
+    MemoryTombstone,
     MemoryWorkspaceSettings,
 )
 from gateway.models.tenancy import User as TenancyUser
@@ -46,7 +48,7 @@ from gateway.services.memory import (
     MemoryService,
     WorkspaceKeys,
 )
-from gateway.services.memory._models import Decision, MemoryModelError, ModelUse
+from gateway.services.memory._models import Decision, MemoryModelError, ModelUse, Note
 from gateway.services.secret_box import generate_secret_key
 
 pytestmark = pytest.mark.asyncio
@@ -68,6 +70,8 @@ class _Models:
     """Stands in for the deployment's memory models."""
 
     decisions: list[Decision] = field(default_factory=list)
+    # What the consolidation model was asked: the proposal, then the entries it was compared with.
+    asked: list[tuple[Note, list[Note]]] = field(default_factory=list)
     fail: bool = False
     embedded: int = 0
     embedding_model: str = "test:embed"
@@ -84,7 +88,8 @@ class _Models:
         self.embedded += len(texts)
         return [_vector(text) for text in texts], _use(endpoint, prompt=len(texts))
 
-    async def decide(self, proposal: str, existing: Sequence[str]) -> tuple[Decision, ModelUse]:
+    async def decide(self, proposal: Note, existing: Sequence[Note]) -> tuple[Decision, ModelUse]:
+        self.asked.append((proposal, list(existing)))
         return self.decisions.pop(0), _use("/v1/memory/consolidation", prompt=40, completion=8)
 
 
@@ -683,15 +688,19 @@ async def test_a_data_key_that_seals_nothing_is_deleted_but_never_the_newest(
     entry = (await async_db.execute(select(MemoryEntry))).scalar_one()
 
     assert (await memory().sweep(tenants.workspace)).keys == 0
+    # The tombstone is sealed under a fresh key, the old one being past its rotation, which then seals nothing.
     await memory().forget(tenants.alice, entry.id)
+    assert (await memory().sweep(tenants.workspace)).keys == 1
+    await _age(async_db, MemoryKey, "created_at", 31)
     assert (await memory().sweep(tenants.workspace)).keys == 0
 
-    memory.configure(memory_key_rotation_days=1)
     await memory().propose(tenants.alice, text="Something new", kind="fact", scope="workspace", external=False)
     await memory().consolidate(tenants.workspace, limit=20)
+    await _age(async_db, MemoryTombstone, "expires_at", 91)
     swept = await memory().sweep(tenants.workspace)
 
-    assert swept.keys == 1
+    # Its tombstone gone, the key it was sealed under seals nothing; the newest is kept.
+    assert (swept.tombstones, swept.keys) == (1, 1)
     assert len((await async_db.execute(select(MemoryKey))).scalars().all()) == 1
 
 
@@ -710,3 +719,255 @@ async def test_an_organization_with_memory_off_stops_it_in_every_workspace(
     assert await memory().workspaces_with_memory() == []
     assert await memory().consolidate(tenants.workspace, limit=20) == 0
     assert len((await async_db.execute(select(MemoryEntry))).scalars().all()) == 1
+
+
+# -- Tombstones: what forgetting leaves behind ------------------------------------
+
+
+async def _approve_held(async_db: AsyncSession) -> None:
+    """What an admin's approval does to every held proposal: back to the consolidator, as reviewed."""
+    await async_db.execute(
+        update(MemoryProposal).where(MemoryProposal.state == "review").values(state="pending", trust="reviewed")
+    )
+    await async_db.commit()
+
+
+async def _held(async_db: AsyncSession) -> list[tuple[str, str | None]]:
+    proposals = (await async_db.execute(select(MemoryProposal))).scalars().all()
+    return [(proposal.state, proposal.review_reason) for proposal in proposals]
+
+
+async def test_forgetting_leaves_a_sealed_tombstone_for_each_version_and_no_text(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    await _learn(memory, tenants.alice, DEPLOY)
+    memory.models.decisions = [Decision("update", 0)]
+    await memory().propose(tenants.alice, text=DEPLOY + " now", kind="procedure", scope="workspace", external=False)
+    await memory().consolidate(tenants.workspace, limit=20)
+    [latest] = await memory().search(tenants.alice, DEPLOY, limit=5)
+
+    assert await memory().forget(tenants.alice, latest.entry.id) == 2
+
+    tombstones = (await async_db.execute(select(MemoryTombstone))).scalars().all()
+    assert len(tombstones) == 2
+    for tombstone in tombstones:
+        assert (tombstone.scope, tombstone.owner_user_id, tombstone.embedding_model) == (
+            "workspace",
+            None,
+            "test:embed",
+        )
+        assert tombstone.embedding_sealed.startswith("mem1.")
+        assert tombstone.expires_at - tombstone.forgotten_at == timedelta(days=90)
+    dump = await async_db.execute(text("SELECT row_to_json(t)::text FROM memory_tombstones t"))
+    assert all("deploy" not in row.lower() for row in dump.scalars().all())
+
+
+async def test_a_forgotten_shared_fact_proposed_again_waits_for_an_admin_whose_approval_lifts_its_tombstone(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    entry = await _learn(memory, tenants.alice, DEPLOY)
+    await memory().forget(tenants.alice, entry)
+
+    await memory().propose(tenants.bob, text=DEPLOY, kind="procedure", scope="workspace", external=False)
+    assert await memory().consolidate(tenants.workspace, limit=20) == 1
+
+    assert await _held(async_db) == [("review", "forgotten")]
+    assert await memory().search(tenants.bob, DEPLOY, limit=5) == []
+
+    await _approve_held(async_db)
+    assert await memory().consolidate(tenants.workspace, limit=20) == 1
+
+    [back] = await memory().search(tenants.bob, DEPLOY, limit=5)
+    assert (back.entry.text, back.entry.trust) == (DEPLOY, "reviewed")
+    assert (await async_db.execute(select(MemoryTombstone))).first() is None
+    # Lifted, it holds nothing back: the next agent's word on it is an ordinary one.
+    await memory().propose(tenants.carol, text=DEPLOY, kind="procedure", scope="workspace", external=False)
+    await memory().consolidate(tenants.workspace, limit=20)
+    assert await _held(async_db) == []
+
+
+async def test_under_a_review_policy_a_forgotten_fact_says_it_was_forgotten(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    await memory().forget(tenants.alice, await _learn(memory, tenants.alice, DEPLOY))
+    await _switch(async_db, tenants.workspace, write_policy="review")
+
+    await memory().propose(tenants.bob, text=DEPLOY, kind="procedure", scope="workspace", external=False)
+    await memory().propose(
+        tenants.bob, text="Run make test before every push", kind="fact", scope="workspace", external=False
+    )
+    await memory().consolidate(tenants.workspace, limit=20)
+
+    assert sorted(await _held(async_db), key=str) == [("review", "forgotten"), ("review", "policy")]
+
+
+async def test_a_members_forgotten_fact_proposed_again_is_dropped(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    mine = await _learn(memory, tenants.alice, "I prefer short answers", scope="member", kind="fact")
+    await memory().forget(tenants.alice, mine)
+
+    await memory().propose(tenants.alice, text="I prefer short answers", kind="fact", scope="member", external=False)
+    assert await memory().consolidate(tenants.workspace, limit=20) == 1
+
+    assert await _held(async_db) == []
+    assert await memory().search(tenants.alice, "I prefer short answers", limit=5) == []
+    # Another member's memory is not held to it.
+    await _learn(memory, tenants.bob, "I prefer short answers", scope="member", kind="fact")
+
+
+async def test_a_tombstone_keeps_a_fact_out_for_the_workspaces_tombstone_days_and_the_sweep_deletes_it(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    await _switch(async_db, tenants.workspace, tombstone_days=7)
+    await memory().forget(tenants.alice, await _learn(memory, tenants.alice, DEPLOY))
+    tombstone = (await async_db.execute(select(MemoryTombstone))).scalar_one()
+    assert tombstone.expires_at - tombstone.forgotten_at == timedelta(days=7)
+    assert (await memory().sweep(tenants.workspace)).tombstones == 0
+
+    await _age(async_db, MemoryTombstone, "expires_at", 8)
+    # Expired, it no longer holds a proposal back, even before the sweep deletes it.
+    await _learn(memory, tenants.bob, DEPLOY)
+    assert (await memory().sweep(tenants.workspace)).tombstones == 1
+    assert (await async_db.execute(select(MemoryTombstone))).first() is None
+
+
+# -- Corroboration: another member proposing what memory already says -------------
+
+
+async def _signals(async_db: AsyncSession, entry_id: uuid.UUID) -> dict[uuid.UUID, str]:
+    rows = (await async_db.execute(select(MemorySignal).where(MemorySignal.entry_id == entry_id))).scalars().all()
+    return {row.user_id: row.signal for row in rows}
+
+
+async def _entry_row(async_db: AsyncSession, entry_id: uuid.UUID) -> MemoryEntry:
+    async_db.expire_all()
+    return (await async_db.execute(select(MemoryEntry).where(MemoryEntry.id == entry_id))).scalar_one()
+
+
+async def test_another_member_proposing_what_an_entry_says_confirms_it_once(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    entry = await _learn(memory, tenants.alice, DEPLOY)
+
+    async def again(caller: MemoryCaller) -> None:
+        await memory().propose(caller, text=DEPLOY, kind="procedure", scope="workspace", external=False)
+        await memory().consolidate(tenants.workspace, limit=20)
+
+    await again(tenants.alice)
+    assert await _signals(async_db, entry) == {}, "its author corroborating it counts for nothing"
+
+    await again(tenants.bob)
+    # The same member through another key and another model is the same member.
+    await again(MemoryCaller(tenants.workspace, tenants.bob.member_id, is_manager=False, api_key_id="k2", model="m2"))
+    assert await _signals(async_db, entry) == {tenants.bob.member_id: "confirm"}
+    row = await _entry_row(async_db, entry)
+    assert (row.confirmations, row.flags, row.status) == (1, 0, "active")
+    assert row.confidence == pytest.approx(0.6)
+
+    await memory().flag(tenants.carol, entry, "stale")
+    await again(tenants.carol)
+    assert (await _signals(async_db, entry))[tenants.carol.member_id] == "flag", "a flag is never overridden"
+    row = await _entry_row(async_db, entry)
+    assert (row.confirmations, row.flags) == (1, 1)
+    assert row.confidence == pytest.approx(0.45)
+    assert len((await async_db.execute(select(MemoryEntry))).scalars().all()) == 1
+
+
+# -- When evidence was observed --------------------------------------------------
+
+
+async def _observed(async_db: AsyncSession, model: Any, at: datetime, *, row_id: uuid.UUID | None = None) -> None:
+    """Set when the evidence of ``model``'s rows, or of the one ``row_id`` names, was observed."""
+    statement = update(model).values(observed_at=at)
+    if row_id is not None:
+        statement = statement.where(model.id == row_id)
+    await async_db.execute(statement)
+    await async_db.commit()
+
+
+async def test_an_entry_keeps_when_its_evidence_was_observed_and_the_model_is_told(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    first = await _learn(memory, tenants.alice, DEPLOY)
+    observed = datetime(2026, 11, 2, 15, 0, tzinfo=UTC)
+    await _observed(async_db, MemoryEntry, observed)
+
+    proposed = datetime(2026, 11, 20, 9, 30, tzinfo=UTC)
+    proposal = await memory().propose(
+        tenants.bob, text=DEPLOY + " today", kind="procedure", scope="workspace", external=False
+    )
+    await _observed(async_db, MemoryProposal, proposed, row_id=proposal)
+    memory.models.decisions = [Decision("update", 0)]
+    await memory().consolidate(tenants.workspace, limit=20)
+
+    [(asked, compared)] = memory.models.asked
+    assert (asked.observed, [note.observed for note in compared]) == (proposed.date(), [observed.date()])
+    [latest] = await memory().search(tenants.alice, DEPLOY, limit=5)
+    assert (latest.entry.version, latest.entry.observed_at) == (2, proposed)
+    history = await memory().get(tenants.alice, latest.entry.id)
+    assert [(version.id, version.observed_at) for version in history.versions] == [(first, observed)]
+
+
+async def test_older_evidence_waits_for_an_admin_rather_than_replace_a_newer_shared_entry(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    newer = await _learn(memory, tenants.alice, DEPLOY)
+    proposal = await memory().propose(
+        tenants.bob, text=DEPLOY + " today", kind="procedure", scope="workspace", external=False
+    )
+    await _observed(async_db, MemoryProposal, datetime.now(UTC) - timedelta(hours=1), row_id=proposal)
+    memory.models.decisions = [Decision("update", 0)]
+    await memory().consolidate(tenants.workspace, limit=20)
+
+    assert await _held(async_db) == [("review", f"older_than_target:{newer}")]
+    [kept] = await memory().search(tenants.alice, DEPLOY, limit=5)
+    assert (kept.entry.id, kept.entry.text) == (newer, DEPLOY)
+
+    # Approved, it replaces the entry the admin saw it beside, as any held change does.
+    await _approve_held(async_db)
+    await memory().consolidate(tenants.workspace, limit=20)
+    [latest] = await memory().search(tenants.alice, DEPLOY, limit=5)
+    assert (latest.entry.text, latest.entry.version, latest.entry.supersedes_id) == (DEPLOY + " today", 2, newer)
+
+
+async def test_a_members_older_word_leaves_their_newer_entry_as_it_is(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    newer = await _learn(memory, tenants.alice, DEPLOY, scope="member")
+    proposal = await memory().propose(
+        tenants.alice, text=DEPLOY + " today", kind="procedure", scope="member", external=False
+    )
+    await _observed(async_db, MemoryProposal, datetime.now(UTC) - timedelta(hours=1), row_id=proposal)
+    # A contradiction too: a member's newer word settles it, and this one is older.
+    memory.models.decisions = [Decision("conflict", 0)]
+    await memory().consolidate(tenants.workspace, limit=20)
+
+    assert await _held(async_db) == []
+    [kept] = await memory().search(tenants.alice, DEPLOY, limit=5)
+    assert (kept.entry.id, kept.entry.text, kept.entry.version) == (newer, DEPLOY, 1)
+
+
+async def test_proposals_decided_out_of_order_never_let_older_evidence_overwrite_newer(
+    memory: Memory, tenants: Tenants, async_db: AsyncSession
+) -> None:
+    """Two agents' changes to one entry, the older one decided last: a pass it failed, or another replica's batch."""
+    original = await _learn(memory, tenants.alice, DEPLOY)
+    now = datetime.now(UTC)
+    await _observed(async_db, MemoryEntry, now - timedelta(days=2))
+    newest = await memory().propose(
+        tenants.bob, text=DEPLOY + " today", kind="procedure", scope="workspace", external=False
+    )
+    older = await memory().propose(
+        tenants.carol, text=DEPLOY + " now", kind="procedure", scope="workspace", external=False
+    )
+    # Carol's agent saw it first; Bob's proposal reached the consolidator first all the same.
+    await _observed(async_db, MemoryProposal, now - timedelta(hours=1), row_id=older)
+    await _observed(async_db, MemoryProposal, now, row_id=newest)
+    memory.models.decisions = [Decision("update", 0), Decision("update", 0)]
+
+    assert await memory().consolidate(tenants.workspace, limit=20) == 2
+
+    [latest] = await memory().search(tenants.alice, DEPLOY, limit=5)
+    assert (latest.entry.text, latest.entry.version, latest.entry.supersedes_id) == (DEPLOY + " today", 2, original)
+    assert await _held(async_db) == [("review", f"older_than_target:{latest.entry.id}")]

@@ -36,7 +36,7 @@ PURPOSE = "memory-content"
 NONCE_BYTES = 12
 
 SealedField = Literal["content", "embedding"]
-SealedRecord = Literal["entry", "proposal"]
+SealedRecord = Literal["entry", "proposal", "tombstone"]
 
 
 class SealedValueError(Exception):

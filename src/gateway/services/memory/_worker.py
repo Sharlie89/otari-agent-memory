@@ -61,13 +61,15 @@ class MemoryConsolidator:
             async with create_unit_of_work() as uow:
                 swept = await self._build_service(uow).sweep(workspace_id)
             deleted += swept.entries
-            if swept.entries or swept.proposals or swept.keys:
+            if swept.entries or swept.proposals or swept.keys or swept.tombstones:
                 logger.info(
-                    "Memory retention in workspace %s deleted %s entries, %s proposals, %s read records and %s keys",
+                    "Memory retention in workspace %s deleted %s entries, %s proposals, %s read records, "
+                    "%s tombstones and %s keys",
                     workspace_id,
                     swept.entries,
                     swept.proposals,
                     swept.reads,
+                    swept.tombstones,
                     swept.keys,
                 )
         return deleted

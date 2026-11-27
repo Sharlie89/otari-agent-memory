@@ -28,6 +28,7 @@ class NewEntry:
     embedding_sealed: str | None
     embedding_model: str | None
     confidence: float
+    observed_at: datetime
     version: int = 1
     supersedes_id: uuid.UUID | None = None
     source_api_key_id: str | None = None
@@ -79,6 +80,7 @@ class EntryRepository(FencedRepository[MemoryEntry]):
             embedding_sealed=entry.embedding_sealed,
             embedding_model=entry.embedding_model,
             confidence=entry.confidence,
+            observed_at=entry.observed_at,
             source_api_key_id=entry.source_api_key_id,
             source_session_id=entry.source_session_id,
             source_model=entry.source_model,
@@ -233,14 +235,15 @@ class EntryRepository(FencedRepository[MemoryEntry]):
         confirmations: int,
         flags: int,
         confidence: float,
-        status: MemoryStatus,
+        status: MemoryStatus | None,
     ) -> None:
-        """Store what the members' signals add up to for one entry."""
+        """Store what the members' signals add up to for one entry; a None ``status`` leaves it as it is."""
         await self._fence(workspace_id)
+        tally = {"confirmations": confirmations, "flags": flags, "confidence": confidence}
         await self.db.execute(
             update(MemoryEntry)
             .where(MemoryEntry.workspace_id == workspace_id, MemoryEntry.id == entry_id)
-            .values(confirmations=confirmations, flags=flags, confidence=confidence, status=status)
+            .values(**tally, **({"status": status} if status is not None else {}))
             .execution_options(synchronize_session=False)
         )
 

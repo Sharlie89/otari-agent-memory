@@ -9,6 +9,7 @@ from gateway.repositories.memory.proposal_repository import ProposalRepository
 from gateway.repositories.memory.read_repository import ReadRepository
 from gateway.repositories.memory.settings_repository import SettingsRepository
 from gateway.repositories.memory.signal_repository import SignalRepository
+from gateway.repositories.memory.tombstone_repository import TombstoneRepository
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class MemoryRepositories:
     entries: EntryRepository
     proposals: ProposalRepository
     signals: SignalRepository
+    tombstones: TombstoneRepository
     reads: ReadRepository
     settings: SettingsRepository
     organizations: OrganizationSettingsRepository
@@ -31,6 +33,7 @@ class MemoryRepositories:
             entries=EntryRepository(uow),
             proposals=ProposalRepository(uow),
             signals=SignalRepository(uow),
+            tombstones=TombstoneRepository(uow),
             reads=ReadRepository(uow),
             settings=SettingsRepository(uow),
             organizations=OrganizationSettingsRepository(uow),

@@ -68,6 +68,7 @@ from gateway.services.memory._models import (
     MemoryModelError,
     MemoryModels,
     ModelUse,
+    Note,
 )
 from gateway.services.memory._ranking import LocalMemoryRanking
 from gateway.services.memory._recall_vectors import RecallVectors
@@ -78,6 +79,7 @@ from gateway.services.memory._store import (
     EntryStore,
     OpenedEntry,
     OpenedProposal,
+    OpenedTombstone,
     ProposalDraft,
     Provenance,
 )
@@ -94,6 +96,10 @@ COMPARE_FLOOR = 0.75
 SAME_FLOOR = 0.95
 # How alike a proposal must be to an entry for the model's update or no_change of it to stand.
 REPLACE_FLOOR = 0.85
+# How alike a proposal must be to a forgotten entry's tombstone to count as the same fact coming back.
+FORGOTTEN_FLOOR = 0.9
+# Days a forgotten entry's tombstone is kept where a workspace says nothing else.
+DEFAULT_TOMBSTONE_DAYS = 90
 # Passes a proposal may fail on a model, or on a mandated guardrail that could not run, before it waits for an
 # admin instead.
 MAX_ATTEMPTS = 5
@@ -207,6 +213,7 @@ class Swept:
     proposals: int
     reads: int
     keys: int
+    tombstones: int = 0
 
 
 @dataclass(frozen=True)
@@ -251,6 +258,7 @@ class WorkspaceMemory:
     experiment_holdout_percent: int
     experiment_started_at: datetime | None
     experiment_ended_at: datetime | None
+    tombstone_days: int
     entries: dict[str, int]
     # Proposals the consolidator has yet to decide, those an admin approved included; and the shared ones it held
     # for an admin, which the review queue lists.
@@ -288,6 +296,7 @@ class SwitchChange:
     # Where the most alike entry is at least this alike, hand over by similarity and skip the rerank model's call.
     recall_rerank_skip_similarity: float | None = None
     experiment_holdout_percent: int = 0
+    tombstone_days: int = DEFAULT_TOMBSTONE_DAYS
 
 
 @dataclass(frozen=True)
@@ -321,6 +330,7 @@ class _Switches:
     hide_external: bool
     write_policy: MemoryWritePolicy
     organization_id: uuid.UUID
+    tombstone_days: int = DEFAULT_TOMBSTONE_DAYS
 
 
 class MemoryService:
@@ -455,6 +465,7 @@ class MemoryService:
                         session_id=caller.session_id,
                         model=caller.model,
                     ),
+                    observed_at=self._now(),
                 )
             )
 
@@ -481,12 +492,15 @@ class MemoryService:
     async def forget(self, caller: MemoryCaller, entry_id: uuid.UUID) -> int:
         """Delete an entry and every version it replaced; how many versions went.
 
-        Its author, its owner, or a workspace manager for a workspace entry, may.
+        Its author, its owner, or a workspace manager for a workspace entry, may. Each version leaves a tombstone,
+        its embedding alone, for the workspace's ``tombstone_days``, so the same fact proposed again does not come
+        straight back: see :meth:`_consolidate_one`.
 
         Raises:
             MemoryOffError: the workspace has not turned memory on.
             MemoryEntryNotFoundError: the caller may recall no entry by that id.
             NotYoursToForgetError: the caller may recall it but not remove it.
+            MemorySealingUnavailableError: no data key could seal its tombstones, so nothing was deleted.
         """
         _require_write(caller)
         async with self._uow:
@@ -498,6 +512,13 @@ class MemoryService:
             if not allowed:
                 raise NotYoursToForgetError
             versions = await self._store.history(caller.workspace_id, entry, limit=10_000)
+            now = self._now()
+            await self._store.write_tombstones(
+                caller.workspace_id,
+                [entry, *versions],
+                at=now,
+                expires_at=now + timedelta(days=switches.tombstone_days),
+            )
             return await self._repos.entries.delete_versions(
                 caller.workspace_id, [entry.id, *(version.id for version in versions)]
             )
@@ -716,6 +737,7 @@ class MemoryService:
                 recall_max_entries=change.recall_max_entries,
                 rerank=(change.recall_rerank, change.recall_min_relevance, change.recall_rerank_skip_similarity),
                 experiment=self._experiment_after(current, change.experiment_holdout_percent),
+                tombstone_days=change.tombstone_days,
             )
             return await self._workspace_memory(workspace_id, organization_id)
 
@@ -791,7 +813,7 @@ class MemoryService:
         return holdout_percent, self._now(), None
 
     async def erase(self, user: User, workspace_id: uuid.UUID) -> Swept:
-        """Delete everything the workspace's memory holds, its data keys last.
+        """Delete everything the workspace's memory holds, tombstones included, its data keys last.
 
         With the keys gone, no backup taken before opens what was deleted. The switches stay as they were.
         """
@@ -800,11 +822,12 @@ class MemoryService:
             entries = await self._repos.entries.delete_all(workspace_id)
             proposals = await self._repos.proposals.delete_all(workspace_id)
             reads = await self._repos.reads.delete_all(workspace_id)
+            tombstones = await self._repos.tombstones.delete_all(workspace_id)
             keys = await self._repos.keys.delete_all(workspace_id)
         self._keys.forget(keys)
         await self._ranking.forget(workspace_id)
         logger.info("Memory of workspace %s was erased by a manager", workspace_id)
-        return Swept(entries, proposals, reads, len(keys))
+        return Swept(entries, proposals, reads, len(keys), tombstones)
 
     # -- The review queue ---------------------------------------------------
 
@@ -904,6 +927,7 @@ class MemoryService:
             ),
             experiment_started_at=settings.experiment_started_at if settings is not None else None,
             experiment_ended_at=settings.experiment_ended_at if settings is not None else None,
+            tombstone_days=settings.tombstone_days if settings is not None else DEFAULT_TOMBSTONE_DAYS,
             entries=await self._repos.entries.count_by_status(workspace_id),
             proposals_waiting=await self._repos.proposals.count_pending(workspace_id),
             proposals_held=await self._repos.proposals.count_held(workspace_id, scope="workspace"),
@@ -920,8 +944,8 @@ class MemoryService:
         """Delete what the workspace keeps past its retention, and the data keys that seal nothing any more.
 
         Entries and their versions go once nobody has used them for the workspace's retention days, retired
-        entries at once, proposals once older than ``memory_proposal_max_age_hours`` and read records after
-        ``memory_read_retention_days``.
+        entries at once, proposals once older than ``memory_proposal_max_age_hours``, read records after
+        ``memory_read_retention_days`` and tombstones once they expire.
         """
         now = self._now()
         async with self._uow:
@@ -936,14 +960,16 @@ class MemoryService:
             reads = await self._repos.reads.delete_older(
                 workspace_id, read_before=now - timedelta(days=self._config.memory_read_retention_days)
             )
+            tombstones = await self._repos.tombstones.delete_expired(workspace_id, now=now)
             in_use = await self._repos.entries.key_ids_in_use(workspace_id)
             in_use |= await self._repos.proposals.key_ids_in_use(workspace_id)
+            in_use |= await self._repos.tombstones.key_ids_in_use(workspace_id)
             keys = await self._repos.keys.delete_unused(
                 workspace_id,
                 in_use=in_use,
                 made_before=now - timedelta(days=self._config.memory_key_rotation_days),
             )
-        return Swept(entries, proposals, reads, keys)
+        return Swept(entries, proposals, reads, keys, tombstones)
 
     # -- The consolidator ---------------------------------------------------
 
@@ -1007,6 +1033,11 @@ class MemoryService:
         One an admin approved (``reviewed``) is held neither by the review policy nor by a mandate again; held over
         an entry the admin saw, it replaces that entry without the model being asked, while it is still active.
         A member's own proposal never waits for an admin, who may not read it: see :meth:`_hold`.
+
+        A proposal alike to a forgotten entry's tombstone waits for an admin (``forgotten``), and approving it for
+        that lifts the tombstone; one approved for another reason before the entry was forgotten waits again.
+        Older evidence never replaces newer: an update by a proposal observed before its target waits for an admin
+        (``older_than_target``), or, a member's own, leaves the newer entry as it is.
         """
         workspace_id = proposal.workspace_id
         approved = proposal.trust == "reviewed"
@@ -1014,12 +1045,28 @@ class MemoryService:
             async with self._uow:
                 await self._hold(proposal, "guardrail")
             return 1
-        if proposal.scope == "workspace" and switches.write_policy == "review" and not approved:
+        held_by_policy = proposal.scope == "workspace" and switches.write_policy == "review" and not approved
+        model = self._models.embedding_model or ""
+        async with self._uow:
+            tombstones = await self._store.live_tombstones(
+                workspace_id,
+                scope=proposal.scope,
+                owner_user_id=proposal.owner_user_id,
+                embedding_model=model,
+                now=self._now(),
+            )
+        # Without a tombstone to compare with, a proposal the review policy holds is not embedded.
+        if held_by_policy and not tombstones:
             async with self._uow:
                 await self._hold(proposal, "policy")
             return 1
         [vector] = await self._embed([proposal.text], workspace_id, proposal.provenance.api_key_id)
-        model = self._models.embedding_model or ""
+        forgotten = _forgotten(vector, tombstones)
+        lifts = approved and proposal.review_reason == "forgotten"
+        if (forgotten and not lifts) or held_by_policy:
+            async with self._uow:
+                await self._hold(proposal, "forgotten" if forgotten else "policy")
+            return 1
         async with self._uow:
             candidates = await self._store.comparable(
                 workspace_id, scope=proposal.scope, owner_user_id=proposal.owner_user_id, embedding_model=model
@@ -1065,12 +1112,29 @@ class MemoryService:
                             entry_id=target.id if target is not None else None,
                         )
                     return 1
+            older = target is not None and proposal.observed_at < target.observed_at
+            if action == "update" and older and not approved:
+                if proposal.scope == "workspace":
+                    async with self._uow:
+                        await self._hold(proposal, "older_than_target", entry_id=target.id if target else None)
+                    return 1
+                # A member's own: their newer word stands.
+                action = "no_change"
         async with self._uow:
             # Removed first, in the block that applies it: a replica that finds it gone applies nothing.
             if not await self._repos.proposals.remove(workspace_id, proposal.id):
                 return 0
+            if lifts and forgotten:
+                await self._repos.tombstones.lift(workspace_id, forgotten)
+                logger.info(
+                    "Memory proposal %s of workspace %s lifted %s tombstones, approved by an admin",
+                    proposal.id,
+                    workspace_id,
+                    len(forgotten),
+                )
             if action == "no_change" and target is not None:
                 await self._repos.entries.touch(workspace_id, [target.id], self._now())
+                await self._corroborate(workspace_id, target, proposal.provenance.author_user_id)
                 return 1
             if action == "add":
                 await self._make_room(workspace_id)
@@ -1086,6 +1150,7 @@ class MemoryService:
                     embedding_model=model,
                     confidence=INITIAL_CONFIDENCE,
                     provenance=proposal.provenance,
+                    observed_at=proposal.observed_at,
                     version=target.version + 1 if target is not None else 1,
                     supersedes_id=target.id if target is not None else None,
                 )
@@ -1093,6 +1158,28 @@ class MemoryService:
             if target is not None:
                 await self._repos.entries.set_status(workspace_id, target.id, "superseded")
         return 1
+
+    async def _corroborate(self, workspace_id: uuid.UUID, entry: OpenedEntry, member_id: uuid.UUID | None) -> None:
+        """Count a member's proposal of what an entry already says as their confirmation of it, in the open block.
+
+        Members are the unit, as for ``memory_confirm``: a member who already said something of the entry, a flag
+        above all, keeps their word, and its author corroborating it counts for nothing. Its status is left as it
+        is, since a confirmation never quarantines.
+        """
+        if member_id is None or member_id == entry.author_user_id:
+            return
+        if await self._repos.signals.of_member(workspace_id, entry.id, member_id) is not None:
+            return
+        await self._repos.signals.put(workspace_id, entry.id, member_id, signal="confirm", reason=None)
+        confirmations, flags = await self._repos.signals.counts(workspace_id, entry.id)
+        await self._repos.entries.set_signals(
+            workspace_id,
+            entry.id,
+            confirmations=confirmations,
+            flags=flags,
+            confidence=confidence(confirmations, flags),
+            status=None,
+        )
 
     async def _passes_guardrails(self, proposal: OpenedProposal, mandated: MandatedGuardrails) -> bool:
         """Whether no ``block`` mandate flags the proposal.
@@ -1130,7 +1217,10 @@ class MemoryService:
         if not self._models.can_decide:
             return Decision("no_change", 0) if nearest[0][0] >= SAME_FLOOR else Decision("add")
         try:
-            decision, use = await self._models.decide(proposal.text, [entry.text for _, entry in nearest])
+            decision, use = await self._models.decide(
+                Note(proposal.text, proposal.observed_at.date()),
+                [Note(entry.text, entry.observed_at.date()) for _, entry in nearest],
+            )
         except MemoryModelError as exc:
             await self._meter_use(proposal.workspace_id, proposal.provenance.api_key_id, exc.use)
             raise
@@ -1196,7 +1286,11 @@ class MemoryService:
         if not await self._repos.organizations.enabled(settings.organization_id):
             return None
         return _Switches(
-            settings.workspace_scope_enabled, settings.hide_external, settings.write_policy, settings.organization_id
+            settings.workspace_scope_enabled,
+            settings.hide_external,
+            settings.write_policy,
+            settings.organization_id,
+            settings.tombstone_days,
         )
 
     async def _visible_entry(self, caller: MemoryCaller, switches: _Switches, entry_id: uuid.UUID) -> OpenedEntry:
@@ -1267,6 +1361,11 @@ def guarded_decision(decision: Decision, alike: Sequence[float]) -> Decision:
         if alike[decision.target] < REPLACE_FLOOR:
             return Decision("add")
     return decision
+
+
+def _forgotten(vector: Sequence[float], tombstones: Sequence[OpenedTombstone]) -> list[uuid.UUID]:
+    """The tombstones ``vector`` is alike enough to for the proposal to be the forgotten fact coming back."""
+    return [tombstone.id for tombstone in tombstones if cosine(vector, tombstone.embedding) >= FORGOTTEN_FLOOR]
 
 
 def _require_write(caller: MemoryCaller) -> None:

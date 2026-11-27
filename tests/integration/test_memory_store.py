@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -15,18 +15,25 @@ from gateway.core.config import GatewayConfig
 from gateway.core.database import dispose_db, init_db
 from gateway.core.unit_of_work import UnitOfWork, create_unit_of_work
 from gateway.exceptions.memory_exceptions import MemorySealingUnavailableError
-from gateway.models.memory import MemoryEntry, MemoryKey, MemoryProposal, MemoryWorkspaceSettings
+from gateway.models.memory import MemoryEntry, MemoryKey, MemoryProposal, MemoryTombstone, MemoryWorkspaceSettings
 from gateway.models.tenancy import User as TenancyUser
 from gateway.repositories.memory import MemoryRepositories
 from gateway.repositories.tenancy import OrganizationRepository, WorkspaceRepository
 from gateway.services.memory import EntryDraft, OpenedEntry, ProposalDraft, Provenance, WorkspaceKeys
-from gateway.services.memory._store import EntryStore
+from gateway.services.memory._store import EntryStore, OpenedTombstone
 from gateway.services.secret_box import generate_secret_key
 
 pytestmark = pytest.mark.asyncio
 
 SECRET = "the staging database password rotates on Fridays"
-FENCED_TABLES = ("memory_keys", "memory_entries", "memory_proposals", "memory_signals", "memory_reads")
+FENCED_TABLES = (
+    "memory_keys",
+    "memory_entries",
+    "memory_proposals",
+    "memory_signals",
+    "memory_reads",
+    "memory_tombstones",
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +85,25 @@ class _Store:
         async with self._uow:
             return await self._store.write_proposal(draft)
 
+    async def forget(self, workspace_id: uuid.UUID, entry_id: uuid.UUID) -> int:
+        """Leave the entry's tombstone, as forgetting it does; how many."""
+        async with self._uow:
+            [entry] = (await self._store.opened(workspace_id, [entry_id])).values()
+            now = datetime.now(UTC)
+            return await self._store.write_tombstones(
+                workspace_id, [entry], at=now, expires_at=now + timedelta(days=90)
+            )
+
+    async def tombstones(self, workspace_id: uuid.UUID, owner: uuid.UUID | None = None) -> list[OpenedTombstone]:
+        async with self._uow:
+            return await self._store.live_tombstones(
+                workspace_id,
+                scope="member" if owner is not None else "workspace",
+                owner_user_id=owner,
+                embedding_model="test:embed",
+                now=datetime.now(UTC),
+            )
+
     async def recallable(self, workspace_id: uuid.UUID, member_id: uuid.UUID) -> list[OpenedEntry]:
         async with self._uow:
             return await self._store.recallable(
@@ -123,6 +149,7 @@ def _entry(
         embedding_model="test:embed",
         confidence=0.5,
         provenance=Provenance(author_user_id=author, api_key_id="key-1", session_id="session-1", model="test:model"),
+        observed_at=datetime.now(UTC),
     )
 
 
@@ -162,6 +189,7 @@ async def test_a_proposal_is_stored_sealed(
         trust="external",
         text=SECRET,
         provenance=Provenance(author_user_id=tenants.alice),
+        observed_at=datetime.now(UTC),
     )
     proposal_id = await memory().propose(draft)
 
@@ -197,6 +225,31 @@ async def test_a_sealed_value_moved_onto_another_workspaces_row_does_not_open(
     await async_db.commit()
 
     assert await memory().recallable(tenants.second, tenants.alice) == []
+
+
+async def test_a_tombstone_keeps_the_embedding_sealed_for_its_own_row_and_scope(
+    memory: Callable[[], _Store], tenants: Tenants, async_db: AsyncSession
+) -> None:
+    shared = await memory().keep(_entry(tenants.first))
+    mine = await memory().keep(_entry(tenants.first, scope="member", owner=tenants.alice))
+    assert await memory().forget(tenants.first, shared) == 1
+    assert await memory().forget(tenants.first, mine) == 1
+
+    [opened] = await memory().tombstones(tenants.first)
+    assert opened.embedding == (0.5, -0.25, 1.0)
+    assert len(await memory().tombstones(tenants.first, owner=tenants.alice)) == 1
+    assert await memory().tombstones(tenants.first, owner=tenants.bob) == []
+    assert await memory().tombstones(tenants.second) == []
+    # Moved onto the member's tombstone, the shared one's embedding opens as nothing.
+    rows = (await async_db.execute(select(MemoryTombstone).order_by(MemoryTombstone.scope))).scalars().all()
+    member_row, workspace_row = rows
+    await async_db.execute(
+        update(MemoryTombstone)
+        .where(MemoryTombstone.id == member_row.id)
+        .values(embedding_sealed=workspace_row.embedding_sealed)
+    )
+    await async_db.commit()
+    assert await memory().tombstones(tenants.first, owner=tenants.alice) == []
 
 
 async def test_without_a_secret_key_nothing_is_stored(

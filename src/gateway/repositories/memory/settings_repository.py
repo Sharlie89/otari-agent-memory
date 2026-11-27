@@ -41,6 +41,7 @@ class SettingsRepository(BaseRepository[MemoryWorkspaceSettings, Never, Never]):
         recall_max_entries: int,
         rerank: tuple[bool, float, float | None],
         experiment: tuple[int, datetime | None, datetime | None],
+        tombstone_days: int,
     ) -> MemoryWorkspaceSettings:
         """Stage the workspace's switches, creating its row the first time.
 
@@ -64,6 +65,7 @@ class SettingsRepository(BaseRepository[MemoryWorkspaceSettings, Never, Never]):
         row.recall_max_entries = recall_max_entries
         row.recall_rerank, row.recall_min_relevance, row.recall_rerank_skip_similarity = rerank
         row.experiment_holdout_percent, row.experiment_started_at, row.experiment_ended_at = experiment
+        row.tombstone_days = tombstone_days
         await self.db.flush()
         return row
 

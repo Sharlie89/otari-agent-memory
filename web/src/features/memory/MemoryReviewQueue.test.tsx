@@ -101,6 +101,7 @@ describe("MemoryReviewQueue", () => {
           text: "Deploy from main",
           version: 3,
           trust: "agent",
+          observed_at: "2026-11-02T15:00:00Z",
         },
       }),
     ])
@@ -109,6 +110,28 @@ describe("MemoryReviewQueue", () => {
     expect(screen.getByText("Deploy from main")).toBeInTheDocument()
     expect(
       screen.getByText("The entry it contradicts, version 3"),
+    ).toBeInTheDocument()
+  })
+
+  it("says when older evidence would replace a newer entry", async () => {
+    renderQueue([
+      held({
+        reason: "older_than_target",
+        entry: {
+          id: "e-1",
+          text: "Deploy from the release branch",
+          version: 2,
+          trust: "agent",
+          observed_at: "2026-11-26T15:00:00Z",
+        },
+      }),
+    ])
+
+    expect(
+      await screen.findByText("Older than the entry it changes"),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByText("The newer entry it changes, version 2"),
     ).toBeInTheDocument()
   })
 

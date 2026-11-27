@@ -6,7 +6,7 @@ names a workspace or a member: those come from the caller's key.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -42,7 +42,10 @@ class ProposeArguments(_Arguments):
     text: str = Field(
         min_length=1,
         max_length=PROPOSAL_MAX_LENGTH,
-        description="One fact, decision or procedure, stated so it is useful on its own to another agent later.",
+        description=(
+            "One fact, decision or procedure, stated so it is useful on its own to another agent later. Write dates "
+            "as absolute dates, e.g. 'yesterday (2026-11-26)', never relative words alone."
+        ),
     )
     kind: MemoryKind = Field(description="fact, decision or procedure.")
     scope: MemoryScope = Field(
@@ -70,6 +73,8 @@ class RecalledEntry(BaseModel):
     confidence: float
     version: int
     created_at: datetime
+    # The UTC date its evidence was observed, against which relative words in ``text`` read.
+    observed_on: date
     relevance: float | None = None
 
 
@@ -113,6 +118,9 @@ class WorkspaceMemoryPublic(BaseModel):
     hide_external: bool = Field(description="Keep entries resting on outside content out of recall.")
     retention_days: int | None = Field(description="Days an unused entry is kept; null keeps the deployment's.")
     deployment_retention_days: int
+    tombstone_days: int = Field(
+        description="Days a forgotten entry keeps the same fact, proposed again, from coming back without an admin."
+    )
     auto_recall: bool = Field(
         description="Search memory for each request's newest user turn and add what is alike enough to it, "
         "with no tool call."
@@ -152,6 +160,7 @@ class WorkspaceMemoryUpdate(BaseModel):
     offer_to_every_request: bool = False
     hide_external: bool = False
     retention_days: int | None = Field(default=None, ge=1, le=3650)
+    tombstone_days: int = Field(default=90, ge=1, le=3650)
     auto_recall: bool = False
     recall_min_similarity: float = Field(default=0.65, ge=0.3, le=0.99)
     recall_max_entries: int = Field(default=3, ge=1, le=5)
@@ -227,6 +236,7 @@ class ReviewedEntryPublic(BaseModel):
     text: str
     version: int
     trust: MemoryTrust
+    observed_at: datetime = Field(description="When the evidence it rests on was observed.")
 
 
 class HeldProposalPublic(BaseModel):
@@ -239,7 +249,9 @@ class HeldProposalPublic(BaseModel):
     reason: MemoryReviewReason | None = Field(
         description="policy: the workspace reviews every shared proposal; conflict: it contradicts an entry; "
         "higher_trust: an agent's change to an entry an admin reviewed; guardrail: a block mandate flagged it; "
-        "guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run."
+        "guardrail_unavailable and model: a mandated guardrail, or the consolidation model, could not run; "
+        "forgotten: it is alike to an entry the workspace forgot, and approving it lets it back; "
+        "older_than_target: it would replace an entry with evidence observed before that entry's."
     )
     author_user_id: uuid.UUID | None = Field(description="The member whose agent proposed it.")
     session_id: str | None
@@ -247,8 +259,8 @@ class HeldProposalPublic(BaseModel):
     created_at: datetime
     expires_at: datetime = Field(description="When it is deleted if nobody decides on it.")
     entry: ReviewedEntryPublic | None = Field(
-        description="The entry it would change: the one it contradicts, or the reviewed one it would replace. "
-        "Approving it replaces this entry with it as a new version."
+        description="The entry it would change: the one it contradicts, the reviewed one it would replace, or the "
+        "newer one it would replace. Approving it replaces this entry with it as a new version."
     )
 
 
@@ -265,6 +277,7 @@ class WorkspaceMemoryErased(BaseModel):
     proposals: int
     reads: int
     keys: int
+    tombstones: int
 
 
 class OrganizationMemoryPublic(BaseModel):
